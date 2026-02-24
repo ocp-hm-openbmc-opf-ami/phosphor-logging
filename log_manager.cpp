@@ -10,6 +10,7 @@
 #include "paths.hpp"
 #include "util.hpp"
 
+#include <sys/stat.h>
 #include <systemd/sd-bus.h>
 #include <systemd/sd-journal.h>
 #include <unistd.h>
@@ -30,7 +31,6 @@
 #include <string_view>
 #include <variant>
 #include <vector>
-#include <sys/stat.h>
 
 using namespace std::chrono;
 extern const std::map<
@@ -195,12 +195,12 @@ void Manager::_commit(uint64_t transactionId [[maybe_unused]],
 
                 // Metadata variable found, save it and remove it from the set.
                 std::string metadata(data, length);
-               /* if (auto pos = metadata.find('='); pos != std::string::npos)
-                {
-                    auto key = metadata.substr(0, pos);
-                    auto value = metadata.substr(pos + 1);
-                    additionalData.emplace(std::move(key), std::move(value));
-                }*/
+                /* if (auto pos = metadata.find('='); pos != std::string::npos)
+                 {
+                     auto key = metadata.substr(0, pos);
+                     auto value = metadata.substr(pos + 1);
+                     additionalData.emplace(std::move(key), std::move(value));
+                 }*/
                 i = metalist.erase(i);
             }
             if (metalist.empty())
@@ -420,10 +420,9 @@ inline void Manager::updateEntryCount()
 auto Manager::createEntry(std::string errMsg, Entry::Level errLvl,
                           std::map<std::string, std::string> additionalData,
                           const FFDCEntries& ffdc)
-			 -> sdbusplus::message::object_path
+    -> sdbusplus::message::object_path
 {
     LogType logType = LogType::DEFAULT;
-
 
     for (const auto& [key, value] : additionalData)
     {
@@ -464,7 +463,8 @@ auto Manager::createEntry(std::string errMsg, Entry::Level errLvl,
         if (!selEnabled)
         {
             lg2::info("SEL is disabled");
-            return sdbusplus::message::object_path{};;
+            return sdbusplus::message::object_path{};
+            ;
         }
 
         if (!Extensions::disableDefaultLogCaps())
@@ -479,7 +479,8 @@ auto Manager::createEntry(std::string errMsg, Entry::Level errLvl,
                         lg2::info(
                             "Linear SEL: Error Capacity limit reached {ERROR_CAP}",
                             "ERROR_CAP", ERROR_CAP);
-                        return sdbusplus::message::object_path{};;
+                        return sdbusplus::message::object_path{};
+                        ;
                     }
                 }
                 else
@@ -492,19 +493,20 @@ auto Manager::createEntry(std::string errMsg, Entry::Level errLvl,
                          ERROR_CAP + ERROR_INFO_CAP - 1))
                     {
                         std::string fullEvent = "System_Event_Log";
-			auto it = std::find_if(
-                             additionalData.begin(), additionalData.end(),
-                             [&fullEvent](const auto& pair)
-                             {
-                                 return pair.second.find(fullEvent) != std::string::npos;
-                             });
+                        auto it = std::find_if(
+                            additionalData.begin(), additionalData.end(),
+                            [&fullEvent](const auto& pair) {
+                                return pair.second.find(fullEvent) !=
+                                       std::string::npos;
+                            });
                         if (it != additionalData.end())
                         {
                             errLvl = Entry::Level::Critical;
                         }
                         else
                         {
-                            return sdbusplus::message::object_path{};;
+                            return sdbusplus::message::object_path{};
+                            ;
                         }
                     }
                     else if (infoErrorsMap[logType].size() >= ERROR_INFO_CAP)
@@ -513,7 +515,8 @@ auto Manager::createEntry(std::string errMsg, Entry::Level errLvl,
                             "Linear SEL: Information Error Capacity limit "
                             "reached {ERROR_CAP}",
                             "ERROR_CAP", ERROR_INFO_CAP);
-                        return sdbusplus::message::object_path{};;
+                        return sdbusplus::message::object_path{};
+                        ;
                     }
                 }
             }
@@ -611,16 +614,17 @@ auto Manager::createEntry(std::string errMsg, Entry::Level errLvl,
             quiesceOnError(entryId);
         }
 
-    // Add entry before calling the extensions so that they have access to it
-	doExtensionLogCreate(
+        // Add entry before calling the extensions so that they have access to
+        // it
+        doExtensionLogCreate(
             *(entries.find(std::make_pair(logType, entryId))->second), ffdc);
 
-    // Note: No need to close the file descriptors in the FFDC.
-	updateEntryLimits(logType);
-    if (logType == LogType::IPMI)
-    {
-        updateEntryCount();
-    }
+        // Note: No need to close the file descriptors in the FFDC.
+        updateEntryLimits(logType);
+        if (logType == LogType::IPMI)
+        {
+            updateEntryCount();
+        }
     }
     return objPath;
 }
@@ -901,7 +905,7 @@ void Manager::erase(LogType logType, uint32_t entryId)
         }
 
         // Delete the persistent representation of this error.
-	fs::path errorPath;
+        fs::path errorPath;
         if (logType == LogType::IPMI)
         {
             errorPath = ERRLOG_PERSIST_PATH_SEL;
@@ -938,35 +942,36 @@ void Manager::erase(LogType logType, uint32_t entryId)
         {
             checkAndRemoveBlockingError(entryId);
 
-        for (auto& remove : Extensions::getDeleteFunctions())
-        {
-            try
+            for (auto& remove : Extensions::getDeleteFunctions())
             {
-                remove(entryId);
-            }
-            catch (const std::exception& e)
-            {
-                lg2::error("An extension's delete function threw an exception: "
-                           "{ERROR}",
-                           "ERROR", e);
+                try
+                {
+                    remove(entryId);
+                }
+                catch (const std::exception& e)
+                {
+                    lg2::error(
+                        "An extension's delete function threw an exception: "
+                        "{ERROR}",
+                        "ERROR", e);
+                }
             }
         }
-    }
-    else
-    {
-        lg2::error("Invalid entry ID ({ID}) to delete", "ID", entryId);
-    }
+        else
+        {
+            lg2::error("Invalid entry ID ({ID}) to delete", "ID", entryId);
+        }
 
-    updateEntryLimits(logType);
-    if (logType == LogType::IPMI)
-    {
-        if (entryId)
+        updateEntryLimits(logType);
+        if (logType == LogType::IPMI)
         {
-            updateLastEntryId(--entryId);
+            if (entryId)
+            {
+                updateLastEntryId(--entryId);
+            }
+            updateEntryCount();
         }
-        updateEntryCount();
     }
-  }
 }
 
 void Manager::restore()

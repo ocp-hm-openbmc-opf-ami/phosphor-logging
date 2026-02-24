@@ -437,7 +437,7 @@ class Manager :
             bus, path.c_str(),
             details::ServerObject<DeleteAllIface, CreateIface,
                                   DeleteLogTypeIface>::action::defer_emit),
-        manager(manager){};
+        manager(manager) {};
 
     /** @brief Delete all d-bus objects.
      */
