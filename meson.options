@@ -54,3 +54,11 @@ option(
     type: 'string',
     description: 'Path to the event filter JSON file.',
 )
+
+option(
+    'storage-select',
+    type: 'combo',
+    choices: ['emmc_sdcard', 'spi'],
+    value: 'emmc_sdcard',
+    description: 'Select storage type for error log storage: emmc_sdcard or spi',
+)

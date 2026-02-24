@@ -19,8 +19,8 @@ int main(int argc, char* argv[])
 
     if (argc >= 2)
     {
-        PERSIST_PATH_ROOT = strdup(argv[1]);
-        info("Using temporary {PATH} for logs", "PATH", PERSIST_PATH_ROOT);
+        ERRLOG_PERSIST_PATH = strdup(argv[1]);
+        info("Using temporary {PATH} for logs", "PATH", ERRLOG_PERSIST_PATH);
     }
 
     auto bus = sdbusplus::bus::new_default();
@@ -29,13 +29,21 @@ int main(int argc, char* argv[])
 
     // Add sdbusplus ObjectManager for the 'root' path of the logging manager.
     sdbusplus::server::manager_t objManager(bus, OBJ_LOGGING);
+    sdbusplus::server::manager_t objEventManager(bus, OBJ_ENTRY);
+    sdbusplus::server::manager_t objSelManager(bus, OBJ_SEL_LOGGING);
+    sdbusplus::server::manager_t objRaidManager(bus, OBJ_RAID_LOGGING);
 
     phosphor::logging::internal::Manager iMgr(bus, OBJ_INTERNAL);
 
     phosphor::logging::Manager mgr(bus, OBJ_LOGGING, iMgr);
+    phosphor::logging::Manager eventMgr(bus, OBJ_ENTRY, iMgr);
+    phosphor::logging::Manager selMgr(bus, OBJ_SEL_LOGGING, iMgr);
+    phosphor::logging::Manager raidMgr(bus, OBJ_RAID_LOGGING, iMgr);
 
     // Create a directory to persist errors.
-    std::filesystem::create_directories(phosphor::logging::paths::error());
+    std::filesystem::create_directories(ERRLOG_PERSIST_PATH);
+    std::filesystem::create_directories(ERRLOG_PERSIST_PATH_SEL);
+    std::filesystem::create_directories(ERRLOG_PERSIST_PATH_RAID);
 
     // Recreate error d-bus objects from persisted errors.
     iMgr.restore();

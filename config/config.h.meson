@@ -17,14 +17,28 @@
 #define CALLOUT_REV_ASSOCIATION "fault"
 #define INVENTORY_ROOT "/xyz/openbmc_project/inventory"
 #define OBJ_ENTRY "/xyz/openbmc_project/logging/entry"
+#define OBJ_ENTRY_SEL "/xyz/openbmc_project/logging/ipmi"
+#define OBJ_ENTRY_RAID "/xyz/openbmc_project/logging/raid"
+
 #define OBJ_INTERNAL "/xyz/openbmc_project/logging/internal/manager"
 #define OBJ_LOGGING "/xyz/openbmc_project/logging"
+
+#define OBJ_SEL_LOGGING "/xyz/openbmc_project/logging/ipmi"
+#define OBJ_RAID_LOGGING "/xyz/openbmc_project/logging/raid"
+
+
 #define SYSTEMD_BUSNAME "org.freedesktop.systemd1"
 #define SYSTEMD_INTERFACE "org.freedesktop.systemd1.Manager"
 #define SYSTEMD_PATH "/org/freedesktop/systemd1"
 
 #define RSYSLOG_SERVER_CONFIG_FILE "@rsyslog_server_conf@"
 
+extern const char *ERRLOG_PERSIST_PATH;
+extern const char *ERRLOG_PERSIST_PATH_SEL;
+extern const char *ERRLOG_PERSIST_PATH_RAID;
+extern const char *IPMI_BACKUP_PATH;
+
+extern const char *EXTENSION_PERSIST_DIR;
 extern const bool IS_UNIT_TEST;
 
 static constexpr size_t ERROR_CAP = @error_cap@;

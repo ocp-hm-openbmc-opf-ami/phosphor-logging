@@ -2,6 +2,7 @@
 
 #include "elog_block.hpp"
 #include "elog_entry.hpp"
+#include "xyz/openbmc_project/Collection/DeleteLogType/server.hpp"
 #include "xyz/openbmc_project/Logging/Internal/Manager/server.hpp"
 
 #include <phosphor-logging/log.hpp>
@@ -12,6 +13,13 @@
 #include <xyz/openbmc_project/Logging/event.hpp>
 
 #include <list>
+
+enum class LogType
+{
+    DEFAULT,
+    IPMI,
+    RAID
+};
 
 namespace phosphor
 {
@@ -24,6 +32,8 @@ extern const std::map<std::string, level> g_errLevelMap;
 using CreateIface = sdbusplus::server::xyz::openbmc_project::logging::Create;
 using DeleteAllIface =
     sdbusplus::server::xyz::openbmc_project::collection::DeleteAll;
+using DeleteLogTypeIface =
+    sdbusplus::server::xyz::openbmc_project::collection::DeleteLogType;
 
 using Severity = sdbusplus::xyz::openbmc_project::Logging::server::Entry::Level;
 using LoggingCleared = sdbusplus::event::xyz::openbmc_project::Logging::Cleared;
@@ -74,6 +84,11 @@ class Manager : public details::ServerObject<details::ManagerIface>
         details::ServerObject<details::ManagerIface>(bus, objPath), busLog(bus),
         entryId(0), fwVersion(readFWVersion()) {};
 
+    /* @fn getSelPolicy()
+     * @brief retrive current sel policy from Settingsd.
+     */
+    virtual std::string getSelPolicy();
+
     /*
      * @fn commit()
      * @brief sd_bus Commit method implementation callback.
@@ -104,7 +119,7 @@ class Manager : public details::ServerObject<details::ManagerIface>
      *
      * @param[in] entryId - unique identifier of the entry
      */
-    void erase(uint32_t entryId);
+    void erase(LogType logType, uint32_t entryId);
 
     /** @brief Construct error d-bus objects from their persisted
      *         representations.
@@ -115,19 +130,62 @@ class Manager : public details::ServerObject<details::ManagerIface>
      *
      *  @return size_t - count of erased entries
      */
-    size_t eraseAll();
+
+    uint16_t eraseAll()
+    {
+        uint16_t totalErased = 0;
+        for (const auto& type :
+             {LogType::IPMI, LogType::RAID, LogType::DEFAULT})
+        {
+            std::vector<uint32_t> idsToErase;
+            // Collect all ids for the current log type
+            for (const auto& [key, _] : entries)
+            {
+                if (key.first == type)
+                {
+                    idsToErase.push_back(key.second);
+                }
+            }
+            // Erase collected ids
+            for (const auto& id : idsToErase)
+            {
+                erase(type, id);
+                ++totalErased;
+            }
+            // Reset per-type ID counter
+            entryIdCounterMap[type] = 0;
+        }
+        // Reset global entryId if used
+        entryId = 0;
+        return totalErased;
+    }
+
+    /** @brief Erases log entries of the specified type
+     *
+     *  This function deletes log entries corresponding to the given log type.
+     *  If an entry ID is provided, it erases only that specific entry;
+     * otherwise, it erases all entries of the given log type.
+     *
+     *  @param[in] logTypeStr - Log type as a string (e.g., "ipmi", "raid",
+     * "default")
+     *  @param[in] entryId - (Optional) Specific entry ID to erase (default is
+     * 0, meaning all)
+     *
+     *  @return uint16_t - Number of entries erased
+     */
+    uint16_t eraseLogTypeEntries(std::string& logTypeStr, uint32_t entryId = 0);
 
     /** @brief Returns the count of high severity errors
      *
      *  @return int - count of real errors
      */
-    int getRealErrSize();
+    int getRealErrSize(LogType logType);
 
     /** @brief Returns the count of Info errors
      *
      *  @return int - count of info errors
      */
-    int getInfoErrSize();
+    int getInfoErrSize(LogType logType);
 
     /** @brief Returns the number of blocking errors
      *
@@ -220,7 +278,21 @@ class Manager : public details::ServerObject<details::ManagerIface>
     void checkAndRemoveBlockingError(uint32_t entryId);
 
     /** @brief Persistent map of Entry dbus objects and their ID */
-    std::map<uint32_t, std::unique_ptr<Entry>> entries;
+    std::map<std::pair<LogType, uint32_t>, std::unique_ptr<Entry>> entries;
+
+    /** @brief update error and info limit is reached**/
+    virtual void updateEntryLimits(LogType logType);
+
+    /** @brief update last entry id into dbus **/
+    void updateLastEntryId(uint16_t lastEntryId);
+
+    std::map<uint32_t, LogType> entryIdToLogType;
+
+    /** @brief verifying the capping limits **/
+    inline void enforceCappingLimit(LogType logType, Entry::Level errLvl);
+
+    /** update total number of entries count **/
+    inline void updateEntryCount();
 
   private:
     /*
@@ -298,13 +370,16 @@ class Manager : public details::ServerObject<details::ManagerIface>
     sdbusplus::bus_t& busLog;
 
     /** @brief List of error ids for high severity errors */
-    std::list<uint32_t> realErrors;
+    std::map<LogType, std::list<uint32_t>> realErrorsMap;
 
     /** @brief List of error ids for Info(and below) severity */
-    std::list<uint32_t> infoErrors;
+    std::map<LogType, std::list<uint32_t>> infoErrorsMap;
 
     /** @brief Id of last error log entry */
     uint32_t entryId;
+
+    /** @brief record of all entries */
+    std::map<LogType, uint32_t> entryIdCounterMap;
 
     /** @brief The BMC firmware version */
     const std::string fwVersion;
@@ -315,6 +390,17 @@ class Manager : public details::ServerObject<details::ManagerIface>
     /** @brief Map of entry id to call back object on properties changed */
     std::map<uint32_t, std::unique_ptr<sdbusplus::bus::match_t>>
         propChangedEntryCallback;
+
+    /** @brief Flag maintained to inform error limit is reached **/
+    std::map<std::string, bool> errorFlags{
+        {"default", false}, {"ipmi", false}, {"raid", false}};
+
+    /** @brief Flag maintained to inform error limit is reached **/
+    std::map<std::string, bool> infoFlags{
+        {"default", false}, {"ipmi", false}, {"raid", false}};
+
+    /** @brief counter for ipmi entries */
+    uint8_t ipmiEntryCount = 0;
 };
 
 } // namespace internal
@@ -326,7 +412,9 @@ class Manager : public details::ServerObject<details::ManagerIface>
  *           xyz.openbmc_project.Collection.DeleteAll and
  *           xyz.openbmc_project.Logging.Create interfaces.
  */
-class Manager : public details::ServerObject<DeleteAllIface, CreateIface>
+class Manager :
+    public details::ServerObject<DeleteAllIface, CreateIface,
+                                 DeleteLogTypeIface>
 {
   public:
     Manager() = delete;
@@ -345,11 +433,11 @@ class Manager : public details::ServerObject<DeleteAllIface, CreateIface>
      */
     Manager(sdbusplus::bus_t& bus, const std::string& path,
             internal::Manager& manager) :
-        details::ServerObject<DeleteAllIface, CreateIface>(
+        details::ServerObject<DeleteAllIface, CreateIface, DeleteLogTypeIface>(
             bus, path.c_str(),
-            details::ServerObject<DeleteAllIface,
-                                  CreateIface>::action::defer_emit),
-        manager(manager) {};
+            details::ServerObject<DeleteAllIface, CreateIface,
+                                  DeleteLogTypeIface>::action::defer_emit),
+        manager(manager){};
 
     /** @brief Delete all d-bus objects.
      */
@@ -359,6 +447,23 @@ class Manager : public details::ServerObject<DeleteAllIface, CreateIface>
         auto numbersOfLogs = manager.eraseAll();
         manager.createFromEvent(
             LoggingCleared("NUMBER_OF_LOGS", numbersOfLogs));
+    }
+
+    /** @brief Implementation for DeleteLogType
+     *  Delete a specific entry or all entries for the provided logType.
+     *  If 'entryId' is provided, only that entry is deleted. If 'entryId'
+     * is not provided, all entries of the given logType are deleted.
+     *
+     *  @param[in] logType - Type of log to delete (e.g., "IPMI", "RAID",
+     * "DEFAULT").
+     *  @param[in] entryId - ID of the specific log entry to delete.
+     */
+
+    void deleteLogType(std::string logType, uint32_t entryId) override
+    {
+        auto numbersOfLogs = manager.eraseLogTypeEntries(logType, entryId);
+        log<level::INFO>("Deleting log entry/entries",
+                         entry("NUM_LOGS=%d", numbersOfLogs));
     }
 
     /** @brief D-Bus method call implementation to create an event log.

@@ -12,6 +12,19 @@ project(
     ],
     version: '1.0.0',
 )
+
+# Read the 'storage-select' option
+storage_type = get_option('storage-select')
+
+# Define compile-time macro based on the selected storage type
+if storage_type == 'emmc_sdcard'
+    message('Building with emmc/sdcard storage support')
+    add_project_arguments('-DSTORAGE_EMMC_SDCARD', language: ['c', 'cpp'])
+else
+    message('Building with SPI (/var/lib) storage support')
+    add_project_arguments('-DSTORAGE_SPI', language: ['c', 'cpp'])
+endif
+
 cpp = meson.get_compiler('cpp')
 
 python_prog = find_program('python3', native: true)

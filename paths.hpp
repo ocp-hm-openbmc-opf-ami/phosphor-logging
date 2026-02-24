@@ -2,7 +2,7 @@
 
 #include <filesystem>
 
-extern const char* PERSIST_PATH_ROOT;
+extern const char* ERRLOG_PERSIST_PATH;
 
 namespace phosphor::logging::paths
 {

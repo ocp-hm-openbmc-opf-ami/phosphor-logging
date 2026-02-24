@@ -28,13 +28,37 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
+#include <sys/stat.h>
 
 using namespace std::chrono;
 extern const std::map<
     phosphor::logging::metadata::Metadata,
     std::function<phosphor::logging::metadata::associations::Type>>
     meta;
+static constexpr auto mapperBusName = "xyz.openbmc_project.ObjectMapper";
+static constexpr auto mapperObjPath = "/xyz/openbmc_project/object_mapper";
+static constexpr auto mapperIntf = "xyz.openbmc_project.ObjectMapper";
+constexpr auto dbusProperty = "org.freedesktop.DBus.Properties";
+constexpr auto policyInterface = "xyz.openbmc_project.Logging.Settings";
+constexpr auto policyLinear =
+    "xyz.openbmc_project.Logging.Settings.Policy.Linear";
+constexpr auto policyDefault =
+    "xyz.openbmc_project.Logging.Settings.Policy.Circular";
+
+/*D-bus details for BMC Global enable */
+static constexpr const char* settingService = "xyz.openbmc_project.Settings";
+static constexpr const char* globalEnblObjpath =
+    "/xyz/openbmc_project/control/globalenables";
+static constexpr const char* globalEnblInterface =
+    "xyz.openbmc_project.Control.BMC.Globalenables";
+using DBusInterface = std::string;
+using DBusService = std::string;
+using DBusPath = std::string;
+using DBusInterfaceList = std::vector<DBusInterface>;
+using DBusSubTree =
+    std::map<DBusPath, std::map<DBusService, DBusInterfaceList>>;
 
 namespace phosphor
 {
@@ -55,14 +79,14 @@ inline auto getLevel(const std::string& errMsg)
     return reqLevel;
 }
 
-int Manager::getRealErrSize()
+int Manager::getRealErrSize(LogType logType)
 {
-    return realErrors.size();
+    return realErrorsMap[logType].size();
 }
 
-int Manager::getInfoErrSize()
+int Manager::getInfoErrSize(LogType logType)
 {
-    return infoErrors.size();
+    return infoErrorsMap[logType].size();
 }
 
 uint32_t Manager::commit(uint64_t transactionId, std::string errMsg)
@@ -171,12 +195,12 @@ void Manager::_commit(uint64_t transactionId [[maybe_unused]],
 
                 // Metadata variable found, save it and remove it from the set.
                 std::string metadata(data, length);
-                if (auto pos = metadata.find('='); pos != std::string::npos)
+               /* if (auto pos = metadata.find('='); pos != std::string::npos)
                 {
                     auto key = metadata.substr(0, pos);
                     auto value = metadata.substr(pos + 1);
                     additionalData.emplace(std::move(key), std::move(value));
-                }
+                }*/
                 i = metalist.erase(i);
             }
             if (metalist.empty())
@@ -200,42 +224,355 @@ void Manager::_commit(uint64_t transactionId [[maybe_unused]],
     createEntry(errMsg, errLvl, additionalData);
 }
 
-auto Manager::createEntry(std::string errMsg, Entry::Level errLvl,
-                          std::map<std::string, std::string> additionalData,
-                          const FFDCEntries& ffdc)
-    -> sdbusplus::message::object_path
+std::string Manager::getSelPolicy()
 {
-    if (!Extensions::disableDefaultLogCaps())
+    DBusSubTree subtree;
+
+    auto method = this->busLog.new_method_call(mapperBusName, mapperObjPath,
+                                               mapperIntf, "GetSubTree");
+    method.append(std::string{"/"}, 0,
+                  std::vector<std::string>{policyInterface});
+    auto reply = this->busLog.call(method);
+    reply.read(subtree);
+
+    if (subtree.empty())
     {
-        if (errLvl < Entry::sevLowerLimit)
-        {
-            if (realErrors.size() >= ERROR_CAP)
-            {
-                erase(realErrors.front());
-            }
-        }
-        else
-        {
-            if (infoErrors.size() >= ERROR_INFO_CAP)
-            {
-                erase(infoErrors.front());
-            }
-        }
+        lg2::info("Compatible interface not on D-Bus. Continuing with default "
+                  "Circular Policy");
+        return policyDefault;
     }
 
-    entryId++;
-    if (errLvl >= Entry::sevLowerLimit)
+    const auto& object = *(subtree.begin());
+    const auto& policyPath = object.first;
+    const auto& policyService = object.second.begin()->first;
+
+    std::variant<std::string> property;
+    method = this->busLog.new_method_call(
+        policyService.c_str(), policyPath.c_str(), dbusProperty, "Get");
+    method.append(policyInterface, "SelPolicy");
+
+    try
     {
-        infoErrors.push_back(entryId);
+        auto reply = this->busLog.call(method);
+        reply.read(property);
+    }
+    catch (...)
+    {
+        lg2::error("Error reading SelPolicy  property. Continuing with default "
+                   "Circular Policy");
+        return policyDefault;
+    }
+
+    return std::get<std::string>(property);
+}
+
+inline std::string toString(LogType type)
+{
+    switch (type)
+    {
+        case LogType::DEFAULT:
+            return "default";
+        case LogType::IPMI:
+            return "ipmi";
+        case LogType::RAID:
+            return "raid";
+        default:
+            return "unknown";
+    }
+}
+
+void Manager::updateEntryLimits(LogType logType)
+{
+    std::string logTypeStr = toString(logType);
+
+    bool newErrorFlag = realErrorsMap[logType].size() >= ERROR_CAP;
+    bool newInfoFlag = infoErrorsMap[logType].size() >= ERROR_INFO_CAP;
+
+    // Update internal state
+    bool oldErrorFlag = errorFlags[logTypeStr];
+    bool oldInfoFlag = infoFlags[logTypeStr];
+
+    errorFlags[logTypeStr] = newErrorFlag;
+    infoFlags[logTypeStr] = newInfoFlag;
+
+    auto updateFlagIfChanged =
+        [this](const std::string& flagName,
+               const std::map<std::string, bool>& fullFlagMap, bool changed) {
+            if (!changed)
+                return;
+
+            auto methodCall = busLog.new_method_call(
+                "xyz.openbmc_project.Settings",
+                "/xyz/openbmc_project/logging/settings",
+                "org.freedesktop.DBus.Properties", "Set");
+
+            methodCall.append(
+                "xyz.openbmc_project.Logging.Settings", flagName,
+                std::variant<std::map<std::string, bool>>(fullFlagMap));
+
+            try
+            {
+                busLog.call(methodCall);
+            }
+            catch (const sdbusplus::exception_t& e)
+            {
+                lg2::error("Failed to update flag {FLAG} via D-Bus: {ERROR}",
+                           "FLAG", flagName, "ERROR", e);
+            }
+        };
+
+    updateFlagIfChanged("ErrorFlags", errorFlags, oldErrorFlag != newErrorFlag);
+    updateFlagIfChanged("InfoFlags", infoFlags, oldInfoFlag != newInfoFlag);
+}
+
+void Manager::updateLastEntryId(uint16_t lastEntryId)
+{
+    auto methodCall = busLog.new_method_call(
+        "xyz.openbmc_project.Settings", "/xyz/openbmc_project/logging/settings",
+        "org.freedesktop.DBus.Properties", "Set");
+
+    std::variant<uint16_t> value = lastEntryId;
+    methodCall.append("xyz.openbmc_project.Logging.Settings", "lastEntryId",
+                      value);
+    try
+    {
+        busLog.call(methodCall);
+    }
+    catch (const sdbusplus::exception_t& e)
+    {
+        lg2::error("Failed to update lastEntryId : {ERROR}", "ERROR", e);
+    }
+}
+
+void backupIPMIEntries()
+{
+    namespace fs = std::filesystem;
+
+    try
+    {
+        fs::create_directories(IPMI_BACKUP_PATH);
+
+        for (const auto& file : fs::directory_iterator(IPMI_BACKUP_PATH))
+        {
+            fs::remove_all(file);
+        }
+
+        for (const auto& file : fs::directory_iterator(ERRLOG_PERSIST_PATH_SEL))
+        {
+            if (fs::is_regular_file(file))
+            {
+                fs::path dst = fs::path(IPMI_BACKUP_PATH) /
+                               file.path().filename();
+                fs::copy_file(file.path(), dst,
+                              fs::copy_options::overwrite_existing);
+            }
+        }
+
+        lg2::info("IPMI log backup completed to {PATH}", "PATH",
+                  IPMI_BACKUP_PATH);
+    }
+    catch (const std::exception& e)
+    {
+        lg2::error("Failed to backup IPMI logs: {ERROR}", "ERROR", e.what());
+    }
+}
+
+inline void Manager::enforceCappingLimit(LogType logType, Entry::Level errLvl)
+{
+    if (errLvl < Entry::sevLowerLimit)
+    {
+        if (realErrorsMap[logType].size() >= ERROR_CAP)
+        {
+            erase(logType, realErrorsMap[logType].front());
+        }
     }
     else
     {
-        realErrors.push_back(entryId);
+        if (infoErrorsMap[logType].size() >= ERROR_INFO_CAP)
+        {
+            erase(logType, infoErrorsMap[logType].front());
+        }
+    }
+}
+
+inline void Manager::updateEntryCount()
+{
+    auto methodCall = busLog.new_method_call(
+        "xyz.openbmc_project.Settings", "/xyz/openbmc_project/logging/settings",
+        "org.freedesktop.DBus.Properties", "Set");
+
+    LogType logType = LogType::IPMI;
+    uint16_t ipmiEntryCount =
+        realErrorsMap[logType].size() + infoErrorsMap[logType].size();
+
+    std::variant<uint16_t> value = ipmiEntryCount;
+    methodCall.append("xyz.openbmc_project.Logging.Settings", "ipmiEntryCount",
+                      value);
+    try
+    {
+        busLog.call(methodCall);
+    }
+    catch (const sdbusplus::exception_t& e)
+    {
+        lg2::error("Failed to update ipmiEntryCount : {ERROR}", "ERROR", e);
+    }
+}
+auto Manager::createEntry(std::string errMsg, Entry::Level errLvl,
+                          std::map<std::string, std::string> additionalData,
+                          const FFDCEntries& ffdc)
+			 -> sdbusplus::message::object_path
+{
+    LogType logType = LogType::DEFAULT;
+
+
+    for (const auto& [key, value] : additionalData)
+    {
+        if (key == "LOGTYPE" && value == "RAID")
+        {
+            logType = LogType::RAID;
+        }
+        else if (key == "RECORD_TYPE")
+        {
+            logType = LogType::IPMI;
+        }
+    }
+
+    // SEL policy check only for IPMI
+    if (logType == LogType::IPMI)
+    {
+        bool selEnabled;
+        sdbusplus::bus::bus bus = sdbusplus::bus::new_default();
+        auto method =
+            bus.new_method_call(settingService, globalEnblObjpath,
+                                "org.freedesktop.DBus.Properties", "Get");
+        // Append the interface and property name to the method call
+        method.append(globalEnblInterface, "Sel");
+
+        try
+        {
+            auto reply = bus.call(method);
+            // Extract the value from the response
+            std::variant<bool> value;
+            reply.read(value);
+            selEnabled = std::get<bool>(value);
+        }
+        catch (const sdbusplus::exception_t& e)
+        {
+            lg2::error("Failed to get D-Bus property:{ERROR}", "ERROR", e);
+            selEnabled = false;
+        }
+        if (!selEnabled)
+        {
+            lg2::info("SEL is disabled");
+            return sdbusplus::message::object_path{};;
+        }
+
+        if (!Extensions::disableDefaultLogCaps())
+        {
+            std::string currentPolicy = getSelPolicy();
+            if (currentPolicy == policyLinear)
+            {
+                if (errLvl < Entry::sevLowerLimit)
+                {
+                    if (realErrorsMap[logType].size() >= ERROR_CAP)
+                    {
+                        lg2::info(
+                            "Linear SEL: Error Capacity limit reached {ERROR_CAP}",
+                            "ERROR_CAP", ERROR_CAP);
+                        return sdbusplus::message::object_path{};;
+                    }
+                }
+                else
+                {
+                    // Adding ipmi full event if info_error filled before max
+                    // limit (error + info_error).
+                    if ((infoErrorsMap[logType].size() == ERROR_INFO_CAP) &&
+                        (infoErrorsMap[logType].size() +
+                             realErrorsMap[logType].size() ==
+                         ERROR_CAP + ERROR_INFO_CAP - 1))
+                    {
+                        std::string fullEvent = "System_Event_Log";
+			auto it = std::find_if(
+                             additionalData.begin(), additionalData.end(),
+                             [&fullEvent](const auto& pair)
+                             {
+                                 return pair.second.find(fullEvent) != std::string::npos;
+                             });
+                        if (it != additionalData.end())
+                        {
+                            errLvl = Entry::Level::Critical;
+                        }
+                        else
+                        {
+                            return sdbusplus::message::object_path{};;
+                        }
+                    }
+                    else if (infoErrorsMap[logType].size() >= ERROR_INFO_CAP)
+                    {
+                        lg2::info(
+                            "Linear SEL: Information Error Capacity limit "
+                            "reached {ERROR_CAP}",
+                            "ERROR_CAP", ERROR_INFO_CAP);
+                        return sdbusplus::message::object_path{};;
+                    }
+                }
+            }
+            else
+            {
+                enforceCappingLimit(logType, errLvl);
+            }
+        }
+    }
+    else
+    {
+        enforceCappingLimit(logType, errLvl);
+    }
+
+    // Generate new entry ID and update entryIdCounterMap
+    entryId = ++entryIdCounterMap[logType];
+
+    std::string objPath;
+    std::string entryPath;
+
+    if (logType == LogType::RAID)
+    {
+        objPath = std::string(OBJ_ENTRY_RAID) + "/" + std::to_string(entryId);
+        entryPath = getEntrySerializePath(entryId, ERRLOG_PERSIST_PATH_RAID);
+    }
+    else if (logType == LogType::IPMI)
+    {
+        if (entryId > std::numeric_limits<uint16_t>::max())
+        {
+            lg2::info("Maximum limit of two bytes reached roll over starts");
+            std::string logTypeStr = "ipmi";
+            backupIPMIEntries();
+            entryIdCounterMap[logType] = 1;
+            entryId = entryIdCounterMap[logType];
+            eraseLogTypeEntries(logTypeStr, 0);
+        }
+        objPath = std::string(OBJ_ENTRY_SEL) + "/" + std::to_string(entryId);
+        entryPath = getEntrySerializePath(entryId, ERRLOG_PERSIST_PATH_SEL);
+        updateLastEntryId(static_cast<uint16_t>(entryId));
+        updateEntryCount();
+    }
+    else
+    {
+        objPath = std::string(OBJ_ENTRY) + "/" + std::to_string(entryId);
+        entryPath = getEntrySerializePath(entryId, ERRLOG_PERSIST_PATH);
+    }
+
+    if (errLvl >= Entry::sevLowerLimit)
+    {
+        infoErrorsMap[logType].push_back(entryId);
+    }
+    else
+    {
+        realErrorsMap[logType].push_back(entryId);
     }
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                   std::chrono::system_clock::now().time_since_epoch())
                   .count();
-    auto objPath = std::string(OBJ_ENTRY) + '/' + std::to_string(entryId);
+    // auto objPath = std::string(OBJ_ENTRY) + '/' + std::to_string(entryId);
 
     AssociationList objects{};
     auto additionalDataVec = util::additional_data::combine(additionalData);
@@ -245,23 +582,46 @@ auto Manager::createEntry(std::string errMsg, Entry::Level errLvl,
         busLog, objPath, entryId,
         ms, // Milliseconds since 1970
         errLvl, std::move(errMsg), std::move(additionalData),
-        std::move(objects), fwVersion, getEntrySerializePath(entryId), *this);
+        std::move(objects), fwVersion, entryPath, *this);
 
-    serialize(*e);
-
-    if (isQuiesceOnErrorEnabled() && (errLvl < Entry::sevLowerLimit) &&
-        isCalloutPresent(*e))
+    if (logType == LogType::RAID)
     {
-        quiesceOnError(entryId);
+        serialize(*e, ERRLOG_PERSIST_PATH_RAID);
+    }
+    else if (logType == LogType::IPMI)
+    {
+        serialize(*e, ERRLOG_PERSIST_PATH_SEL);
+    }
+    else
+    {
+        serialize(*e);
     }
 
-    // Add entry before calling the extensions so that they have access to it
-    entries.insert(std::make_pair(entryId, std::move(e)));
+    entries.insert(
+        std::make_pair(std::make_pair(logType, entryId), std::move(e)));
 
-    doExtensionLogCreate(*entries.find(entryId)->second, ffdc);
+    if (logType == LogType::DEFAULT)
+    {
+        // TODO: Currently, `quiesceOnError` and `Pels` are supported for
+        // default logging events. Support for different types of logs can be
+        // added in the future.
+        if (isQuiesceOnErrorEnabled() && (errLvl < Entry::sevLowerLimit) &&
+            isCalloutPresent(*e))
+        {
+            quiesceOnError(entryId);
+        }
+
+    // Add entry before calling the extensions so that they have access to it
+	doExtensionLogCreate(
+            *(entries.find(std::make_pair(logType, entryId))->second), ffdc);
 
     // Note: No need to close the file descriptors in the FFDC.
-
+	updateEntryLimits(logType);
+    if (logType == LogType::IPMI)
+    {
+        updateEntryCount();
+    }
+    }
     return objPath;
 }
 
@@ -322,9 +682,14 @@ void Manager::findAndRemoveResolvedBlocks()
 {
     for (auto& entry : entries)
     {
+        const auto& [logType, entryId] = entry.first;
+        if (logType != LogType::DEFAULT)
+        {
+            continue;
+        }
         if (entry.second->resolved())
         {
-            checkAndRemoveBlockingError(entry.first);
+            checkAndRemoveBlockingError(entryId);
         }
     }
 }
@@ -505,75 +870,9 @@ void Manager::checkAndRemoveBlockingError(uint32_t entryId)
     return;
 }
 
-size_t Manager::eraseAll()
+void Manager::erase(LogType logType, uint32_t entryId)
 {
-    std::vector<uint32_t> logIDWithHwIsolation;
-    for (auto& func : Extensions::getLogIDWithHwIsolationFunctions())
-    {
-        try
-        {
-            func(logIDWithHwIsolation);
-        }
-        catch (const std::exception& e)
-        {
-            lg2::error("An extension's LogIDWithHwIsolation function threw an "
-                       "exception: {ERROR}",
-                       "ERROR", e);
-        }
-    }
-    size_t entriesSize = entries.size();
-    auto iter = entries.begin();
-    if (logIDWithHwIsolation.empty())
-    {
-        while (iter != entries.end())
-        {
-            auto e = iter->first;
-            ++iter;
-            erase(e);
-        }
-        entryId = 0;
-    }
-    else
-    {
-        while (iter != entries.end())
-        {
-            auto e = iter->first;
-            ++iter;
-            try
-            {
-                if (!std::ranges::contains(logIDWithHwIsolation, e))
-                {
-                    erase(e);
-                }
-                else
-                {
-                    entriesSize--;
-                }
-            }
-            catch (const sdbusplus::xyz::openbmc_project::Common::Error::
-                       Unavailable& e)
-            {
-                entriesSize--;
-            }
-        }
-        if (!entries.empty())
-        {
-            entryId = std::ranges::max_element(entries, [](const auto& a,
-                                                           const auto& b) {
-                          return a.first < b.first;
-                      })->first;
-        }
-        else
-        {
-            entryId = 0;
-        }
-    }
-    return entriesSize;
-}
-
-void Manager::erase(uint32_t entryId)
-{
-    auto entryFound = entries.find(entryId);
+    auto entryFound = entries.find(std::make_pair(logType, entryId));
     if (entries.end() != entryFound)
     {
         for (auto& func : Extensions::getDeleteProhibitedFunctions())
@@ -602,7 +901,19 @@ void Manager::erase(uint32_t entryId)
         }
 
         // Delete the persistent representation of this error.
-        fs::path errorPath(paths::error());
+	fs::path errorPath;
+        if (logType == LogType::IPMI)
+        {
+            errorPath = ERRLOG_PERSIST_PATH_SEL;
+        }
+        else if (logType == LogType::DEFAULT)
+        {
+            errorPath = ERRLOG_PERSIST_PATH;
+        }
+        else if (logType == LogType::RAID)
+        {
+            errorPath = ERRLOG_PERSIST_PATH_RAID;
+        }
         errorPath /= std::to_string(entryId);
         fs::remove(errorPath);
 
@@ -615,15 +926,17 @@ void Manager::erase(uint32_t entryId)
         };
         if (entryFound->second->severity() >= Entry::sevLowerLimit)
         {
-            removeId(infoErrors, entryId);
+            removeId(infoErrorsMap[logType], entryId);
         }
         else
         {
-            removeId(realErrors, entryId);
+            removeId(realErrorsMap[logType], entryId);
         }
         entries.erase(entryFound);
 
-        checkAndRemoveBlockingError(entryId);
+        if (logType == LogType::DEFAULT)
+        {
+            checkAndRemoveBlockingError(entryId);
 
         for (auto& remove : Extensions::getDeleteFunctions())
         {
@@ -643,6 +956,17 @@ void Manager::erase(uint32_t entryId)
     {
         lg2::error("Invalid entry ID ({ID}) to delete", "ID", entryId);
     }
+
+    updateEntryLimits(logType);
+    if (logType == LogType::IPMI)
+    {
+        if (entryId)
+        {
+            updateLastEntryId(--entryId);
+        }
+        updateEntryCount();
+    }
+  }
 }
 
 void Manager::restore()
@@ -651,48 +975,155 @@ void Manager::restore()
         return id == restoredId;
     };
 
-    fs::path dir(paths::error());
-    if (!fs::exists(dir) || fs::is_empty(dir))
+    // Iterate over all log types
+    for (const auto& logType : {LogType::DEFAULT, LogType::IPMI, LogType::RAID})
     {
-        return;
-    }
+        fs::path dir;
+        std::string objEntry;
 
-    for (auto& file : fs::directory_iterator(dir))
-    {
-        auto id = file.path().filename().c_str();
-        auto idNum = std::stol(id);
-        auto e = std::make_unique<Entry>(
-            busLog, std::string(OBJ_ENTRY) + '/' + id, idNum, *this);
-        if (deserialize(file.path(), *e))
+        switch (logType)
         {
-            // validate the restored error entry id
-            if (sanity(static_cast<uint32_t>(idNum), e->id()))
-            {
-                e->path(file.path(), true);
-                if (e->severity() >= Entry::sevLowerLimit)
-                {
-                    infoErrors.push_back(idNum);
-                }
-                else
-                {
-                    realErrors.push_back(idNum);
-                }
+            case LogType::DEFAULT:
+                dir = ERRLOG_PERSIST_PATH;
+                objEntry = OBJ_ENTRY;
+                break;
+            case LogType::IPMI:
+                dir = ERRLOG_PERSIST_PATH_SEL;
+                objEntry = OBJ_ENTRY_SEL;
+                break;
+            case LogType::RAID:
+                dir = ERRLOG_PERSIST_PATH_RAID;
+                objEntry = OBJ_ENTRY_RAID;
+                break;
+        }
 
-                entries.insert(std::make_pair(idNum, std::move(e)));
-            }
-            else
+        if (!fs::exists(dir) || fs::is_empty(dir))
+        {
+            continue;
+        }
+
+        // Special handling for IPMI: sort files by modification time
+        if (logType == LogType::IPMI)
+        {
+            std::vector<std::tuple<time_t, long, fs::path>> sortedFiles;
+
+            for (auto& file : fs::directory_iterator(dir))
             {
-                lg2::error(
-                    "Failed in sanity check while restoring error entry. "
-                    "Ignoring error entry {ID_NUM}/{ENTRY_ID}.",
-                    "ID_NUM", idNum, "ENTRY_ID", e->id());
+                try
+                {
+                    auto id = file.path().filename().string();
+                    auto idNum = std::stol(id);
+                    struct stat st;
+                    if (stat(file.path().c_str(), &st) == 0)
+                    {
+                        sortedFiles.emplace_back(st.st_mtime, idNum,
+                                                 file.path());
+                    }
+                }
+                catch (...)
+                {
+                    continue; // skip invalid files
+                }
+            }
+
+            std::stable_sort(sortedFiles.begin(), sortedFiles.end(),
+                             [](const auto& a, const auto& b) {
+                                 auto t1 = std::get<0>(a), t2 = std::get<0>(b);
+                                 if (t1 != t2)
+                                     return t1 < t2;
+                                 return std::get<1>(a) < std::get<1>(b);
+                             });
+
+            // Now restore in sorted order
+            for (const auto& [timestamp, idNum, path] : sortedFiles)
+            {
+                auto idStr = std::to_string(idNum);
+                auto e = std::make_unique<Entry>(busLog, objEntry + '/' + idStr,
+                                                 idNum, *this);
+
+                if (deserialize(path, *e))
+                {
+                    if (sanity(static_cast<uint32_t>(idNum), e->id()))
+                    {
+                        e->path(path, true);
+
+                        if (e->severity() >= Entry::sevLowerLimit)
+                        {
+                            infoErrorsMap[logType].push_back(idNum);
+                        }
+                        else
+                        {
+                            realErrorsMap[logType].push_back(idNum);
+                        }
+
+                        entries.emplace(std::make_pair(logType, idNum),
+                                        std::move(e));
+                        entryIdCounterMap[logType] = idNum;
+                        updateLastEntryId(idNum);
+                        updateEntryCount();
+                    }
+                    else
+                    {
+                        lg2::error(
+                            "Failed in sanity check while restoring error entry. "
+                            "Ignoring error entry {ID_NUM}/{ENTRY_ID}.",
+                            "ID_NUM", idNum, "ENTRY_ID", e->id());
+                    }
+                }
             }
         }
-    }
+        else
+        {
+            for (auto& file : fs::directory_iterator(dir))
+            {
+                auto id = file.path().filename().c_str();
+                auto idNum = std::stol(id);
+                auto e = std::make_unique<Entry>(busLog, objEntry + '/' + id,
+                                                 idNum, *this);
 
-    if (!entries.empty())
-    {
-        entryId = entries.rbegin()->first;
+                if (deserialize(file.path(), *e))
+                {
+                    // validate the restored error entry id
+                    if (sanity(static_cast<uint32_t>(idNum), e->id()))
+                    {
+                        e->path(file.path(), true);
+
+                        if (e->severity() >= Entry::sevLowerLimit)
+                        {
+                            infoErrorsMap[logType].push_back(idNum);
+                        }
+                        else
+                        {
+                            realErrorsMap[logType].push_back(idNum);
+                        }
+
+                        entries.emplace(std::make_pair(logType, idNum),
+                                        std::move(e));
+                    }
+                    else
+                    {
+                        lg2::error(
+                            "Failed in sanity check while restoring error entry. "
+                            "Ignoring error entry {ID_NUM}/{ENTRY_ID}.",
+                            "ID_NUM", idNum, "ENTRY_ID", e->id());
+                    }
+                }
+            }
+            auto it = entries.lower_bound(std::make_pair(logType, 0));
+            if (it != entries.end())
+            {
+                auto lastIt = it;
+                for (;
+                     lastIt != entries.end() && lastIt->first.first == logType;
+                     ++lastIt)
+                {}
+                if (lastIt != it)
+                {
+                    --lastIt;
+                    entryIdCounterMap[logType] = lastIt->first.second;
+                }
+            }
+        }
     }
 }
 
@@ -713,6 +1144,83 @@ auto Manager::create(const std::string& message, Entry::Level severity,
                      const FFDCEntries& ffdc) -> sdbusplus::message::object_path
 {
     return createEntry(message, severity, additionalData, ffdc);
+}
+
+uint16_t Manager::eraseLogTypeEntries(std::string& logTypeStr, uint32_t entryId)
+{
+    if (logTypeStr.empty())
+    {
+        // Case 1: logTypeStr is empty – not allowed
+        throw sdbusplus::xyz::openbmc_project::Common::Error::InvalidArgument();
+    }
+
+    LogType type;
+
+    // Convert logType string to enum
+    if (logTypeStr == "ipmi")
+    {
+        type = LogType::IPMI;
+    }
+    else if (logTypeStr == "raid")
+    {
+        type = LogType::RAID;
+    }
+    else if (logTypeStr == "default")
+    {
+        type = LogType::DEFAULT;
+    }
+    else
+    {
+        // Case 1: Invalid log type string
+        throw sdbusplus::xyz::openbmc_project::Common::Error::InvalidArgument();
+    }
+
+    uint16_t erasedCount = 0;
+
+    if (entryId == 0)
+    {
+        // Case 2: Delete all entries of the specified log type
+        for (auto iter = entries.begin(); iter != entries.end();)
+        {
+            if (iter->first.first == type)
+            {
+                auto current = iter++;
+                erase(current->first.first, current->first.second);
+                ++erasedCount;
+            }
+            else
+            {
+                ++iter;
+            }
+        }
+
+        // Reset entry counter for this logType
+        entryIdCounterMap[type] = 0;
+    }
+    else
+    {
+        // Case 3: Delete specific entry ID of the specified log type
+        auto key = std::make_pair(type, entryId);
+        auto iter = entries.find(key);
+        if (iter != entries.end())
+        {
+            erase(type, entryId);
+            erasedCount = 1;
+        }
+        else
+        {
+            // Entry not found
+            throw sdbusplus::xyz::openbmc_project::Common::Error::
+                InvalidArgument();
+        }
+    }
+
+    if (!entryId)
+    {
+        updateEntryLimits(type);
+    }
+
+    return erasedCount;
 }
 
 } // namespace internal

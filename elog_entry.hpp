@@ -1,7 +1,6 @@
 #pragma once
 
 #include "xyz/openbmc_project/Logging/Entry/server.hpp"
-#include "xyz/openbmc_project/Object/Delete/server.hpp"
 #include "xyz/openbmc_project/Software/Version/server.hpp"
 
 #include <sdbusplus/bus.hpp>
@@ -18,7 +17,6 @@ namespace logging
 
 using EntryIfaces = sdbusplus::server::object_t<
     sdbusplus::server::xyz::openbmc_project::logging::Entry,
-    sdbusplus::server::xyz::openbmc_project::object::Delete,
     sdbusplus::server::xyz::openbmc_project::association::Definitions,
     sdbusplus::server::xyz::openbmc_project::software::Version,
     sdbusplus::server::xyz::openbmc_project::common::FilePath>;
@@ -130,10 +128,6 @@ class Entry : public EntryIfaces
     std::string resolution(std::string value) override;
 
     using sdbusplus::server::xyz::openbmc_project::logging::Entry::resolution;
-
-    /** @brief Delete this d-bus object.
-     */
-    void delete_() override;
 
     /** @brief Severity level to check in cap.
      *  @details Errors with severity lesser than this will be

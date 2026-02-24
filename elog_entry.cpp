@@ -15,13 +15,6 @@ namespace phosphor
 namespace logging
 {
 
-// TODO Add interfaces to handle the error log id numbering
-
-void Entry::delete_()
-{
-    parent.erase(id());
-}
-
 bool Entry::resolved(bool value)
 {
     auto current =
