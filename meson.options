@@ -1,0 +1,56 @@
+option('libonly', type: 'boolean', description: 'Build library only')
+option('tests', type: 'feature', description: 'Build tests')
+option(
+    'openpower-pel-extension',
+    type: 'feature',
+    description: 'Create PELs',
+    value: 'disabled',
+)
+
+option('yamldir', type: 'string', description: 'Path to YAML')
+option(
+    'callout_yaml',
+    type: 'string',
+    value: 'callouts/callouts-example.yaml',
+    description: 'Path to Callout YAML',
+)
+
+option(
+    'error_cap',
+    type: 'integer',
+    value: 200,
+    description: 'Max number of error enttries allowed for commit',
+)
+option(
+    'error_info_cap',
+    type: 'integer',
+    value: 10,
+    description: 'Cap on informational (and below) severity errors',
+)
+
+option(
+    'phal',
+    type: 'feature',
+    value: 'disabled',
+    description: 'Enable support for PHAL',
+)
+
+option(
+    'rsyslog_server_conf',
+    type: 'string',
+    value: '/etc/rsyslog.d/server.conf',
+    description: 'Path to rsyslog server conf file',
+)
+
+option(
+    'lg2_commit_strategy',
+    type: 'combo',
+    choices: ['dbus', 'journal', 'both'],
+    value: 'both',
+)
+
+option(
+    'event-filter',
+    type: 'string',
+    description: 'Path to the event filter JSON file.',
+)
