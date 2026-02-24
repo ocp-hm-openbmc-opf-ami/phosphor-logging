@@ -16,6 +16,7 @@
 
 #include <optional>
 #include <string>
+#include <regex>
 
 namespace phosphor
 {
@@ -189,10 +190,14 @@ uint16_t Server::port(uint16_t value)
     return result;
 }
 
-NetworkClient::TransportProtocol Server::transportProtocol(
-    NetworkClient::TransportProtocol value)
+NetworkClient::TransportProtocol
+    Server::transportProtocol(NetworkClient::TransportProtocol value)
 {
     TransportProtocol result{};
+    const std::string filePath = "/etc/rsyslog.conf";
+    const std::string tempPath = "/etc/rsyslog.conf.tmp";
+    std::ifstream inFile(filePath);
+    std::ofstream outFile(tempPath);
 
     try
     {
@@ -204,6 +209,70 @@ NetworkClient::TransportProtocol Server::transportProtocol(
 
         writeConfig(address(), port(), value, configFilePath.c_str());
         result = NetworkClient::transportProtocol(value);
+
+	if(value == NetworkClient::TransportProtocol::TCP)
+        {
+	   std::string line;
+           while (std::getline(inFile, line))
+           {
+               std::string trimmed = line;
+               trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+
+               if (trimmed == "#module(load=\"imtcp\")" ||
+               trimmed == "#module(load=\"lmnsd_ossl\")")
+              {
+                 auto pos = line.find('#');
+                 if (pos != std::string::npos)
+                 {
+                     line.erase(pos, 1);
+                 }
+              }
+              outFile << line << '\n';
+              if (!outFile)
+              {
+                 log<level::ERR> ("Error writing to temp file");
+		 return result;
+              }
+          }
+
+          inFile.close();
+          outFile.close();
+
+         if (std::rename(tempPath.c_str(), filePath.c_str()) != 0)
+         {
+	     log<level::ERR>("Error replacing original file");
+             std::remove(tempPath.c_str());
+         }
+        }
+        else if (value == NetworkClient::TransportProtocol::UDP)
+        {
+	    std::string line;
+            while (std::getline(inFile, line))
+            {
+                std::string trimmed = line;
+                trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+
+                if (trimmed == "module(load=\"imtcp\")" ||
+                    trimmed == "module(load=\"lmnsd_ossl\")")
+                {
+                    if (trimmed[0] != '#')
+                    {
+                        outFile << "#" << line << "\n";
+                        continue;
+                    }
+                }
+                outFile << line << "\n";
+            }
+
+            inFile.close();
+            outFile.close();
+
+            if (std::rename(tempPath.c_str(), filePath.c_str()) != 0)
+            {
+                log<level::ERR>( "Failed to replace original config file.");
+		return result;
+            }
+        }
     }
     catch (const InternalFailure& e)
     {
@@ -284,6 +353,144 @@ void Server::restore(const char* filePath)
         NetworkClient::port(std::get<1>(*ret));
         NetworkClient::transportProtocol(std::get<2>(*ret));
     }
+}
+
+void Server::updateSizeValue(uint16_t newSize, const char* filePath) {
+    std::ifstream inputFile(filePath);
+    if (!inputFile) {
+        log<level::ERR>("Error opening file: " );
+        return;
+    }
+
+    std::string content;
+    std::string line;
+    bool inTargetBlock = false;
+
+    std::regex sizeRegex(R"(\s*size\s*\d+[kK]?)");
+
+    while (std::getline(inputFile, line)) {
+        if (line.find("/var/log/*.log") != std::string::npos) {
+            inTargetBlock = true;
+        }
+        if (inTargetBlock && line.find("}") != std::string::npos) {
+            inTargetBlock = false;
+        }
+        if (inTargetBlock && std::regex_search(line, sizeRegex)) {
+            // Preserve leading spaces and update size format
+            std::smatch match;
+            if (std::regex_search(line, match, std::regex(R"(^\s*)"))) {
+                std::string leadingSpaces = match.str(0);
+                line = leadingSpaces + "size " + std::to_string(newSize);
+            }
+        }
+        content += line + "\n";
+    }
+    inputFile.close();
+
+    // Writing back to file
+    std::ofstream outputFile(filePath, std::ios::trunc);
+    if (!outputFile) {
+        log<level::ERR>("Error writing to file: ");
+        return;
+    }
+
+    outputFile << content;
+    outputFile.close();
+    restart();
+}
+
+
+void Server::updateRotateValue(bool rotateValue, const char* filePath) {
+    std::ifstream inputFile(filePath);
+    if (!inputFile) {
+         log<level::ERR>("Error opening file: ");
+        return;
+    }
+
+    std::string content;
+    std::string line;
+    bool inTargetBlock = false;
+    while (std::getline(inputFile, line)) {
+        if (line.find("/var/log/*.log") != std::string::npos) {
+            inTargetBlock = true;
+        }
+        if (inTargetBlock && std::regex_search(line, std::regex(R"(})"))) {
+            inTargetBlock = false;
+        }
+        if (inTargetBlock && std::regex_search(line, std::regex(R"(rotate\s+\d+)"))) {
+            line = "        rotate " + std::string(rotateValue ? "1" : "0");
+        }
+        content += line + "\n";
+    }
+    inputFile.close();
+
+    std::ofstream outputFile(filePath, std::ios::trunc);
+    if (!outputFile) {
+        log<level::ERR>("Error writing to file: ");
+        return;
+    }
+
+    outputFile << content;
+    outputFile.close();
+    restart();
+}
+
+bool Server::rotateCount(bool rotateValue)
+{
+
+    uint16_t updatedValue{};
+
+    try
+    {
+        auto currentValue = rotateCount();
+        if (currentValue == rotateValue)
+        {
+            return currentValue;
+        }
+
+        updateRotateValue(rotateValue);
+        updatedValue = NetworkClient::rotateCount(rotateValue);
+    }
+    catch (const InternalFailure& e)
+    {
+        throw;
+    }
+    catch (const std::exception& e)
+    {
+        log<level::ERR>(e.what());
+        elog<InternalFailure>();
+    }
+
+    return updatedValue;
+
+}
+
+uint16_t Server::fileSize(uint16_t newSize)
+{
+    uint16_t updatedSize{};
+    constexpr uint16_t maxFileSize = 65535;
+    try
+    {
+        auto currentSize = fileSize();
+        if(currentSize == newSize || newSize > maxFileSize)
+        {
+          return currentSize;
+        }
+
+        updateSizeValue(newSize);
+        updatedSize = NetworkClient::fileSize(newSize);
+    }
+    catch (const InternalFailure& e)
+    {
+        throw;
+    }
+    catch (const std::exception& e)
+    {
+        log<level::ERR>(e.what());
+        elog<InternalFailure>();
+    }
+
+    return updatedSize;
 }
 
 void Server::restart()

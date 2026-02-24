@@ -65,6 +65,8 @@ class Server : public Iface
     using NetworkClient::address;
     using NetworkClient::port;
     using NetworkClient::transportProtocol;
+    using NetworkClient::rotateCount;
+    using NetworkClient::fileSize;
 
     /** @brief Override that updates rsyslog config file as well
      *  @param[in] value - remote server address
@@ -86,8 +88,18 @@ class Server : public Iface
      *  @param[in] value - UDP/TCP.
      *  @returns protocol value
      */
-    virtual TransportProtocol transportProtocol(
-        TransportProtocol protocol) override;
+    virtual TransportProtocol
+        transportProtocol(TransportProtocol protocol) override;
+
+    /** @brief - Set value of FileSize
+      *  @param[in] value - size of log file
+      * */
+    virtual uint16_t fileSize(uint16_t value) override;
+
+    /** @brief Set value of RotateCount
+     *  @param[in] value - rotate value 0 0r 1
+     * */
+    virtual bool rotateCount(bool value) override;
 
   private:
     /** @brief Update remote server address and port in
@@ -120,6 +132,18 @@ class Server : public Iface
     {
         restart();
     }
+
+    /* @brief Update the Rotatecount Value
+     * @param[in] roteate - file rotate value 0 or 1
+     * @param[in] filePath - rsyslog logrotate config file path
+     */
+    void updateRotateValue(bool rotate, const char* filePath = "/etc/logrotate.d/logrotate.rsyslog");
+
+     /* @brief Update the Rotatecount Value
+     * @param[in] size - size of log file
+     * @param[in] filePath - rsyslog logrotate config file path
+     */
+    void updateSizeValue(uint16_t size, const char* filePath = "/etc/logrotate.d/logrotate.rsyslog");
 
     sdbusplus::bus::match_t hostnameChange;
 };
