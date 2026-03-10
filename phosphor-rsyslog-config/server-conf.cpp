@@ -418,7 +418,7 @@ void Server::updateRotateValue(bool rotateValue, const char* filePath) {
             inTargetBlock = false;
         }
         if (inTargetBlock && std::regex_search(line, std::regex(R"(rotate\s+\d+)"))) {
-            line = "        rotate " + std::string(rotateValue ? "1" : "0");
+            line = std::string("        rotate ") + (rotateValue ? "1" : "0");
         }
         content += line + "\n";
     }
