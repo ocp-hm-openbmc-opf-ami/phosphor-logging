@@ -618,13 +618,13 @@ auto Manager::createEntry(std::string errMsg, Entry::Level errLvl,
         // it
         doExtensionLogCreate(
             *(entries.find(std::make_pair(logType, entryId))->second), ffdc);
+    }
 
-        // Note: No need to close the file descriptors in the FFDC.
-        updateEntryLimits(logType);
-        if (logType == LogType::IPMI)
-        {
-            updateEntryCount();
-        }
+    // Note: No need to close the file descriptors in the FFDC.
+    updateEntryLimits(logType);
+    if (logType == LogType::IPMI)
+    {
+        updateEntryCount();
     }
     return objPath;
 }
