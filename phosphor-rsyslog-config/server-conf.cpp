@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include <regex>
+#include <limits>
 
 namespace phosphor
 {
@@ -41,21 +42,26 @@ std::optional<
     parseConfig(std::istream& ss)
 {
     std::string line;
-    std::getline(ss, line);
-
-    std::string serverAddress;
-    std::string serverPort;
-    NetworkClient::TransportProtocol serverTransportProtocol =
-        NetworkClient::TransportProtocol::TCP;
-
-    // Ignore if line is commented
-    if (!line.empty() && '#' != line.at(0))
+    while (std::getline(ss, line))
     {
+        auto firstNonSpace = line.find_first_not_of(" \t");
+        if (firstNonSpace == std::string::npos || line[firstNonSpace] == '#')
+        {
+            continue;
+        }
+
+        std::string serverAddress;
+        std::string serverPort;
+        NetworkClient::TransportProtocol serverTransportProtocol =
+            NetworkClient::TransportProtocol::TCP;
+
         //"*.* @@<address>:<port>" or
         //"*.* @@[<ipv6-address>:<port>"
         auto start = line.find('@');
-        if (start == std::string::npos)
+        if (start == std::string::npos || start + 1 >= line.size())
+        {
             return {};
+        }
 
         // Skip "*.* @@" or "*.* @"
         if (line.at(start + 1) == '@')
@@ -103,21 +109,94 @@ std::optional<
             serverAddress = line.substr(start, pos - start);
             serverPort = line.substr(pos + 1);
         }
+
+        if (serverAddress.empty() || serverPort.empty())
+        {
+            return {};
+        }
+
+        try
+        {
+            return std::make_tuple(std::move(serverAddress),
+                                   std::stoul(serverPort),
+                                   serverTransportProtocol);
+        }
+        catch (const std::exception& ex)
+        {
+            log<level::ERR>("Invalid config", entry("ERR=%s", ex.what()));
+            return {};
+        }
     }
-    if (serverAddress.empty() || serverPort.empty())
+
+    return {};
+}
+
+std::tuple<std::optional<uint16_t>, std::optional<bool>>
+    parseLogrotateConfig(std::istream& ss)
+{
+    std::string line;
+    bool inTargetBlock = false;
+    std::optional<uint16_t> parsedSize;
+    std::optional<bool> parsedRotateCount;
+
+    std::regex sizeRegex(R"(^\s*size\s+(\d+)([kK]?)\s*$)");
+    std::regex rotateRegex(R"(^\s*rotate\s+(\d+)\s*$)");
+
+    while (std::getline(ss, line))
     {
-        return {};
+        if (line.find("/var/log/*.log") != std::string::npos)
+        {
+            inTargetBlock = true;
+            continue;
+        }
+
+        if (!inTargetBlock)
+        {
+            continue;
+        }
+
+        if (line.find('}') != std::string::npos)
+        {
+            inTargetBlock = false;
+            continue;
+        }
+
+        std::smatch match;
+        if (std::regex_match(line, match, sizeRegex) && match.size() >= 2)
+        {
+            try
+            {
+                auto sizeValue = std::stoul(match[1].str());
+                if (match.size() >= 3 && !match[2].str().empty())
+                {
+                    sizeValue *= 1024;
+                }
+
+                if (sizeValue <= std::numeric_limits<uint16_t>::max())
+                {
+                    parsedSize = static_cast<uint16_t>(sizeValue);
+                }
+            }
+            catch (const std::exception&)
+            {
+                // Ignore malformed value and keep current property default.
+            }
+        }
+        else if (std::regex_match(line, match, rotateRegex) &&
+                 match.size() >= 2)
+        {
+            try
+            {
+                parsedRotateCount = (std::stoul(match[1].str()) > 0);
+            }
+            catch (const std::exception&)
+            {
+                // Ignore malformed value and keep current property default.
+            }
+        }
     }
-    try
-    {
-        return std::make_tuple(std::move(serverAddress), std::stoul(serverPort),
-                               serverTransportProtocol);
-    }
-    catch (const std::exception& ex)
-    {
-        log<level::ERR>("Invalid config", entry("ERR=%s", ex.what()));
-        return {};
-    }
+
+    return std::make_tuple(parsedSize, parsedRotateCount);
 }
 
 } // namespace internal
@@ -352,6 +431,18 @@ void Server::restore(const char* filePath)
         NetworkClient::address(std::get<0>(*ret));
         NetworkClient::port(std::get<1>(*ret));
         NetworkClient::transportProtocol(std::get<2>(*ret));
+    }
+
+    std::fstream rotateStream("/etc/logrotate.d/logrotate.rsyslog",
+                              std::fstream::in);
+    auto rotateRet = internal::parseLogrotateConfig(rotateStream);
+    if (std::get<0>(rotateRet))
+    {
+        NetworkClient::fileSize(*std::get<0>(rotateRet));
+    }
+    if (std::get<1>(rotateRet))
+    {
+        NetworkClient::rotateCount(*std::get<1>(rotateRet));
     }
 }
 
