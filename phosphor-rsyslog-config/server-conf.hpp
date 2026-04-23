@@ -63,10 +63,10 @@ class Server : public Iface
     }
 
     using NetworkClient::address;
-    using NetworkClient::port;
-    using NetworkClient::transportProtocol;
-    using NetworkClient::rotateCount;
     using NetworkClient::fileSize;
+    using NetworkClient::port;
+    using NetworkClient::rotateCount;
+    using NetworkClient::transportProtocol;
 
     /** @brief Override that updates rsyslog config file as well
      *  @param[in] value - remote server address
@@ -88,12 +88,12 @@ class Server : public Iface
      *  @param[in] value - UDP/TCP.
      *  @returns protocol value
      */
-    virtual TransportProtocol
-        transportProtocol(TransportProtocol protocol) override;
+    virtual TransportProtocol transportProtocol(
+        TransportProtocol protocol) override;
 
     /** @brief - Set value of FileSize
-      *  @param[in] value - size of log file
-      * */
+     *  @param[in] value - size of log file
+     * */
     virtual uint16_t fileSize(uint16_t value) override;
 
     /** @brief Set value of RotateCount
@@ -137,13 +137,17 @@ class Server : public Iface
      * @param[in] roteate - file rotate value 0 or 1
      * @param[in] filePath - rsyslog logrotate config file path
      */
-    void updateRotateValue(bool rotate, const char* filePath = "/etc/logrotate.d/logrotate.rsyslog");
+    void updateRotateValue(
+        bool rotate,
+        const char* filePath = "/etc/logrotate.d/logrotate.rsyslog");
 
-     /* @brief Update the Rotatecount Value
+    /* @brief Update the Rotatecount Value
      * @param[in] size - size of log file
      * @param[in] filePath - rsyslog logrotate config file path
      */
-    void updateSizeValue(uint16_t size, const char* filePath = "/etc/logrotate.d/logrotate.rsyslog");
+    void updateSizeValue(
+        uint16_t size,
+        const char* filePath = "/etc/logrotate.d/logrotate.rsyslog");
 
     sdbusplus::bus::match_t hostnameChange;
 };

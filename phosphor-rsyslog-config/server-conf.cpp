@@ -14,10 +14,10 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-#include <optional>
-#include <string>
-#include <regex>
 #include <limits>
+#include <optional>
+#include <regex>
+#include <string>
 
 namespace phosphor
 {
@@ -131,8 +131,8 @@ std::optional<
     return {};
 }
 
-std::tuple<std::optional<uint16_t>, std::optional<bool>>
-    parseLogrotateConfig(std::istream& ss)
+std::tuple<std::optional<uint16_t>, std::optional<bool>> parseLogrotateConfig(
+    std::istream& ss)
 {
     std::string line;
     bool inTargetBlock = false;
@@ -269,8 +269,8 @@ uint16_t Server::port(uint16_t value)
     return result;
 }
 
-NetworkClient::TransportProtocol
-    Server::transportProtocol(NetworkClient::TransportProtocol value)
+NetworkClient::TransportProtocol Server::transportProtocol(
+    NetworkClient::TransportProtocol value)
 {
     TransportProtocol result{};
     const std::string filePath = "/etc/rsyslog.conf";
@@ -289,43 +289,43 @@ NetworkClient::TransportProtocol
         writeConfig(address(), port(), value, configFilePath.c_str());
         result = NetworkClient::transportProtocol(value);
 
-	if(value == NetworkClient::TransportProtocol::TCP)
+        if (value == NetworkClient::TransportProtocol::TCP)
         {
-	   std::string line;
-           while (std::getline(inFile, line))
-           {
-               std::string trimmed = line;
-               trimmed.erase(0, trimmed.find_first_not_of(" \t"));
+            std::string line;
+            while (std::getline(inFile, line))
+            {
+                std::string trimmed = line;
+                trimmed.erase(0, trimmed.find_first_not_of(" \t"));
 
-               if (trimmed == "#module(load=\"imtcp\")" ||
-               trimmed == "#module(load=\"lmnsd_ossl\")")
-              {
-                 auto pos = line.find('#');
-                 if (pos != std::string::npos)
-                 {
-                     line.erase(pos, 1);
-                 }
-              }
-              outFile << line << '\n';
-              if (!outFile)
-              {
-                 log<level::ERR> ("Error writing to temp file");
-		 return result;
-              }
-          }
+                if (trimmed == "#module(load=\"imtcp\")" ||
+                    trimmed == "#module(load=\"lmnsd_ossl\")")
+                {
+                    auto pos = line.find('#');
+                    if (pos != std::string::npos)
+                    {
+                        line.erase(pos, 1);
+                    }
+                }
+                outFile << line << '\n';
+                if (!outFile)
+                {
+                    log<level::ERR>("Error writing to temp file");
+                    return result;
+                }
+            }
 
-          inFile.close();
-          outFile.close();
+            inFile.close();
+            outFile.close();
 
-         if (std::rename(tempPath.c_str(), filePath.c_str()) != 0)
-         {
-	     log<level::ERR>("Error replacing original file");
-             std::remove(tempPath.c_str());
-         }
+            if (std::rename(tempPath.c_str(), filePath.c_str()) != 0)
+            {
+                log<level::ERR>("Error replacing original file");
+                std::remove(tempPath.c_str());
+            }
         }
         else if (value == NetworkClient::TransportProtocol::UDP)
         {
-	    std::string line;
+            std::string line;
             while (std::getline(inFile, line))
             {
                 std::string trimmed = line;
@@ -348,8 +348,8 @@ NetworkClient::TransportProtocol
 
             if (std::rename(tempPath.c_str(), filePath.c_str()) != 0)
             {
-                log<level::ERR>( "Failed to replace original config file.");
-		return result;
+                log<level::ERR>("Failed to replace original config file.");
+                return result;
             }
         }
     }
@@ -446,10 +446,12 @@ void Server::restore(const char* filePath)
     }
 }
 
-void Server::updateSizeValue(uint16_t newSize, const char* filePath) {
+void Server::updateSizeValue(uint16_t newSize, const char* filePath)
+{
     std::ifstream inputFile(filePath);
-    if (!inputFile) {
-        log<level::ERR>("Error opening file: " );
+    if (!inputFile)
+    {
+        log<level::ERR>("Error opening file: ");
         return;
     }
 
@@ -459,17 +461,22 @@ void Server::updateSizeValue(uint16_t newSize, const char* filePath) {
 
     std::regex sizeRegex(R"(\s*size\s*\d+[kK]?)");
 
-    while (std::getline(inputFile, line)) {
-        if (line.find("/var/log/*.log") != std::string::npos) {
+    while (std::getline(inputFile, line))
+    {
+        if (line.find("/var/log/*.log") != std::string::npos)
+        {
             inTargetBlock = true;
         }
-        if (inTargetBlock && line.find("}") != std::string::npos) {
+        if (inTargetBlock && line.find("}") != std::string::npos)
+        {
             inTargetBlock = false;
         }
-        if (inTargetBlock && std::regex_search(line, sizeRegex)) {
+        if (inTargetBlock && std::regex_search(line, sizeRegex))
+        {
             // Preserve leading spaces and update size format
             std::smatch match;
-            if (std::regex_search(line, match, std::regex(R"(^\s*)"))) {
+            if (std::regex_search(line, match, std::regex(R"(^\s*)")))
+            {
                 std::string leadingSpaces = match.str(0);
                 line = leadingSpaces + "size " + std::to_string(newSize);
             }
@@ -480,7 +487,8 @@ void Server::updateSizeValue(uint16_t newSize, const char* filePath) {
 
     // Writing back to file
     std::ofstream outputFile(filePath, std::ios::trunc);
-    if (!outputFile) {
+    if (!outputFile)
+    {
         log<level::ERR>("Error writing to file: ");
         return;
     }
@@ -490,25 +498,31 @@ void Server::updateSizeValue(uint16_t newSize, const char* filePath) {
     restart();
 }
 
-
-void Server::updateRotateValue(bool rotateValue, const char* filePath) {
+void Server::updateRotateValue(bool rotateValue, const char* filePath)
+{
     std::ifstream inputFile(filePath);
-    if (!inputFile) {
-         log<level::ERR>("Error opening file: ");
+    if (!inputFile)
+    {
+        log<level::ERR>("Error opening file: ");
         return;
     }
 
     std::string content;
     std::string line;
     bool inTargetBlock = false;
-    while (std::getline(inputFile, line)) {
-        if (line.find("/var/log/*.log") != std::string::npos) {
+    while (std::getline(inputFile, line))
+    {
+        if (line.find("/var/log/*.log") != std::string::npos)
+        {
             inTargetBlock = true;
         }
-        if (inTargetBlock && std::regex_search(line, std::regex(R"(})"))) {
+        if (inTargetBlock && std::regex_search(line, std::regex(R"(})")))
+        {
             inTargetBlock = false;
         }
-        if (inTargetBlock && std::regex_search(line, std::regex(R"(rotate\s+\d+)"))) {
+        if (inTargetBlock &&
+            std::regex_search(line, std::regex(R"(rotate\s+\d+)")))
+        {
             line = std::string("        rotate ") + (rotateValue ? "1" : "0");
         }
         content += line + "\n";
@@ -516,7 +530,8 @@ void Server::updateRotateValue(bool rotateValue, const char* filePath) {
     inputFile.close();
 
     std::ofstream outputFile(filePath, std::ios::trunc);
-    if (!outputFile) {
+    if (!outputFile)
+    {
         log<level::ERR>("Error writing to file: ");
         return;
     }
@@ -528,7 +543,6 @@ void Server::updateRotateValue(bool rotateValue, const char* filePath) {
 
 bool Server::rotateCount(bool rotateValue)
 {
-
     uint16_t updatedValue{};
 
     try
@@ -553,7 +567,6 @@ bool Server::rotateCount(bool rotateValue)
     }
 
     return updatedValue;
-
 }
 
 uint16_t Server::fileSize(uint16_t newSize)
@@ -563,9 +576,9 @@ uint16_t Server::fileSize(uint16_t newSize)
     try
     {
         auto currentSize = fileSize();
-        if(currentSize == newSize || newSize > maxFileSize)
+        if (currentSize == newSize || newSize > maxFileSize)
         {
-          return currentSize;
+            return currentSize;
         }
 
         updateSizeValue(newSize);
