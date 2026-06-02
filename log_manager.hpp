@@ -117,9 +117,12 @@ class Manager : public details::ServerObject<details::ManagerIface>
 
     /** @brief Erase specified entry d-bus object
      *
+     * @param[in] logType - log type (e.g. IPMI, RAID, or general)
      * @param[in] entryId - unique identifier of the entry
+     * @param[in] deferUpdates - if true, skip per-entry D-Bus updates (caller
+     *                           must do a batch update after the loop)
      */
-    void erase(LogType logType, uint32_t entryId);
+    void erase(LogType logType, uint32_t entryId, bool deferUpdates = false);
 
     /** @brief Construct error d-bus objects from their persisted
      *         representations.

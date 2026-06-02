@@ -874,7 +874,7 @@ void Manager::checkAndRemoveBlockingError(uint32_t entryId)
     return;
 }
 
-void Manager::erase(LogType logType, uint32_t entryId)
+void Manager::erase(LogType logType, uint32_t entryId, bool deferUpdates)
 {
     auto entryFound = entries.find(std::make_pair(logType, entryId));
     if (entries.end() != entryFound)
@@ -962,14 +962,20 @@ void Manager::erase(LogType logType, uint32_t entryId)
             lg2::error("Invalid entry ID ({ID}) to delete", "ID", entryId);
         }
 
-        updateEntryLimits(logType);
+        if (!deferUpdates)
+        {
+            updateEntryLimits(logType);
+        }
         if (logType == LogType::IPMI)
         {
-            if (entryId)
+            if (!deferUpdates)
             {
-                updateLastEntryId(--entryId);
+                if (entryId)
+                {
+                    updateLastEntryId(--entryId);
+                }
+                updateEntryCount();
             }
-            updateEntryCount();
         }
     }
 }
@@ -1184,13 +1190,15 @@ uint16_t Manager::eraseLogTypeEntries(std::string& logTypeStr, uint32_t entryId)
 
     if (entryId == 0)
     {
-        // Case 2: Delete all entries of the specified log type
+        // Case 2: Delete all entries of the specified log type.
+        // Use deferUpdates=true to skip per-entry D-Bus calls; do one batch update after the loop.
         for (auto iter = entries.begin(); iter != entries.end();)
         {
             if (iter->first.first == type)
             {
                 auto current = iter++;
-                erase(current->first.first, current->first.second);
+                erase(current->first.first, current->first.second,
+                      /*deferUpdates=*/true);
                 ++erasedCount;
             }
             else
@@ -1201,6 +1209,13 @@ uint16_t Manager::eraseLogTypeEntries(std::string& logTypeStr, uint32_t entryId)
 
         // Reset entry counter for this logType
         entryIdCounterMap[type] = 0;
+
+        // Single batch D-Bus update after all entries are erased.
+        if (type == LogType::IPMI)
+        {
+            updateLastEntryId(0);
+            updateEntryCount();
+        }
     }
     else
     {
