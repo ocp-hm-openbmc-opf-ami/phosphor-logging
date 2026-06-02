@@ -1191,7 +1191,8 @@ uint16_t Manager::eraseLogTypeEntries(std::string& logTypeStr, uint32_t entryId)
     if (entryId == 0)
     {
         // Case 2: Delete all entries of the specified log type.
-        // Use deferUpdates=true to skip per-entry D-Bus calls; do one batch update after the loop.
+        // Use deferUpdates=true to skip per-entry D-Bus calls; do one batch
+        // update after the loop.
         for (auto iter = entries.begin(); iter != entries.end();)
         {
             if (iter->first.first == type)
