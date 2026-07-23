@@ -1093,8 +1093,6 @@ void Manager::restore()
                         entries.emplace(std::make_pair(logType, idNum),
                                         std::move(e));
                         entryIdCounterMap[logType] = idNum;
-                        updateLastEntryId(idNum);
-                        updateEntryCount();
                     }
                     else
                     {
@@ -1257,6 +1255,12 @@ void Manager::restore()
                 static_cast<uint16_t>(entryIdCounterMap[logType]));
             updateEntryCount();
         }
+    }
+
+    if (entryIdCounterMap.count(LogType::IPMI))
+    {
+        updateLastEntryId(entryIdCounterMap[LogType::IPMI]);
+        updateEntryCount();
     }
 }
 
