@@ -59,10 +59,17 @@ class Manager : public PELInterface
     {
         for (const auto& entry : _logManager.entries)
         {
+#ifdef UNIT_TEST
+            setEntryPath(entry.first.second);
+            setServiceProviderNotifyFlag(entry.first.second);
+            // Create PELEntry interface and setup properties with their values
+            createPELEntry(entry.first.second, true);
+#else
             setEntryPath(entry.first);
             setServiceProviderNotifyFlag(entry.first);
             // Create PELEntry interface and setup properties with their values
             createPELEntry(entry.first, true);
+#endif
         }
 
         setupPELDeleteWatch();

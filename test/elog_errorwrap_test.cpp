@@ -16,14 +16,14 @@ TEST_F(TestLogManager, logCap)
 
     // Max num of Info( and below Sev) errors can be created is qual to
     // ERROR_INFO_CAP
-    EXPECT_EQ(ERROR_INFO_CAP, manager.getInfoErrSize());
+    EXPECT_EQ(ERROR_INFO_CAP, manager.getInfoErrSize(LogType::DEFAULT));
 
     for (size_t i = 0; i < ERROR_CAP + 20; i++)
     {
         manager.commitWithLvl(i, "FOO", 0);
     }
     // Max num of high severity errors can be created is qual to ERROR_CAP
-    EXPECT_EQ(ERROR_CAP, manager.getRealErrSize());
+    EXPECT_EQ(ERROR_CAP, manager.getRealErrSize(LogType::DEFAULT));
 }
 
 } // namespace internal

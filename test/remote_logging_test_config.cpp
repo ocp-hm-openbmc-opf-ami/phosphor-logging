@@ -42,14 +42,14 @@ TEST_F(TestRemoteLogging, testGoodConfig)
 {
     config->address("1.1.1.1");
     config->port(100);
-    EXPECT_EQ(getConfig(configFilePath.c_str()), "*.* @@1.1.1.1:100");
+    EXPECT_EQ(getConfig(configFilePath.c_str()), "*.* @1.1.1.1:100");
 }
 
 TEST_F(TestRemoteLogging, testClearAddress)
 {
     config->address("1.1.1.1");
     config->port(100);
-    EXPECT_EQ(getConfig(configFilePath.c_str()), "*.* @@1.1.1.1:100");
+    EXPECT_EQ(getConfig(configFilePath.c_str()), "*.* @1.1.1.1:100");
     config->address("");
     EXPECT_EQ(getConfig(configFilePath.c_str()), "*.* /dev/null");
 }
@@ -58,7 +58,7 @@ TEST_F(TestRemoteLogging, testClearPort)
 {
     config->address("1.1.1.1");
     config->port(100);
-    EXPECT_EQ(getConfig(configFilePath.c_str()), "*.* @@1.1.1.1:100");
+    EXPECT_EQ(getConfig(configFilePath.c_str()), "*.* @1.1.1.1:100");
     config->port(0);
     EXPECT_EQ(getConfig(configFilePath.c_str()), "*.* /dev/null");
 }
@@ -67,7 +67,7 @@ TEST_F(TestRemoteLogging, testGoodIPv6Config)
 {
     config->address("abcd:ef01::01");
     config->port(50000);
-    EXPECT_EQ(getConfig(configFilePath.c_str()), "*.* @@[abcd:ef01::01]:50000");
+    EXPECT_EQ(getConfig(configFilePath.c_str()), "*.* @[abcd:ef01::01]:50000");
 }
 
 TEST_F(TestRemoteLogging, parseConfigGoodIpv6)

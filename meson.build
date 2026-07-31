@@ -29,8 +29,11 @@ cpp = meson.get_compiler('cpp')
 
 python_prog = find_program('python3', native: true)
 libsystemd_dep = dependency('libsystemd')
-
-sdbusplus_dep = dependency('sdbusplus')
+if (get_option('tests').enabled())
+        sdbusplus_dep = subproject('sdbusplus').get_variable('sdbusplus_dep')
+else
+        sdbusplus_dep = dependency('sdbusplus')
+endif
 sdbusplusplus_prog = find_program('sdbus++', native: true)
 sdbuspp_gen_meson_prog = find_program('sdbus++-gen-meson', native: true)
 sdbusplusplus_depfiles = files()
@@ -39,8 +42,14 @@ if sdbusplus_dep.type_name() == 'internal'
         'sdbusplusplus_depfiles',
     )
 endif
+if (get_option('tests').enabled())
+	pdi_dep = dependency('phosphor-dbus-interfaces-ami')
+    add_project_arguments('-Wno-error=switch', language: 'cpp')
+    add_project_arguments('-DUNIT_TEST=1', language: 'cpp')
+else
+	pdi_dep = dependency('phosphor-dbus-interfaces')
+endif
 
-pdi_dep = dependency('phosphor-dbus-interfaces')
 
 # Find the installed YAML directory, either from a configure option or
 # by pulling it from the PDI dependency.
