@@ -1049,8 +1049,19 @@ void Manager::restore()
             for (const auto& [timestamp, idNum, path] : sortedFiles)
             {
                 auto idStr = std::to_string(idNum);
-                auto e = std::make_unique<Entry>(busLog, objEntry + '/' + idStr,
-                                                 idNum, *this);
+                std::unique_ptr<Entry> e;
+                try
+                {
+                    e = std::make_unique<Entry>(busLog, objEntry + '/' + idStr,
+                                                idNum, *this);
+                }
+                catch (const sdbusplus::exception_t& ex)
+                {
+                    lg2::error(
+                        "Unable to create restored error entry {ID}: {ERROR}",
+                        "ID", idNum, "ERROR", ex);
+                    continue;
+                }
 
                 if (deserialize(path, *e))
                 {
@@ -1087,14 +1098,36 @@ void Manager::restore()
         {
             for (auto& file : fs::directory_iterator(dir))
             {
-                auto id = file.path().filename().c_str();
-                auto idNum = std::stol(id);
-                auto e = std::make_unique<Entry>(busLog, objEntry + '/' + id,
-                                                 idNum, *this);
+                auto filename = file.path().filename().string();
+                long idNum;
+                try
+                {
+                    idNum = std::stol(filename);
+                }
+                catch (const std::exception& ex)
+                {
+                    lg2::error(
+                        "Skipping non-numeric restored file {FILE}: {ERROR}",
+                        "FILE", filename, "ERROR", ex);
+                    continue;
+                }
+                auto idStr = std::to_string(idNum);
+                std::unique_ptr<Entry> e;
+                try
+                {
+                    e = std::make_unique<Entry>(
+                        busLog, objEntry + '/' + idStr, idNum, *this);
+                }
+                catch (const sdbusplus::exception_t& ex)
+                {
+                    lg2::error(
+                        "Unable to create restored error entry {ID}: {ERROR}",
+                        "ID", idNum, "ERROR", ex);
+                    continue;
+                }
 
                 if (deserialize(file.path(), *e))
                 {
-                    // validate the restored error entry id
                     if (sanity(static_cast<uint32_t>(idNum), e->id()))
                     {
                         e->path(file.path(), true);
@@ -1119,21 +1152,59 @@ void Manager::restore()
                             "ID_NUM", idNum, "ENTRY_ID", e->id());
                     }
                 }
-            }
-            auto it = entries.lower_bound(std::make_pair(logType, 0));
-            if (it != entries.end())
-            {
-                auto lastIt = it;
-                for (;
-                     lastIt != entries.end() && lastIt->first.first == logType;
-                     ++lastIt)
-                {}
-                if (lastIt != it)
+                else
                 {
-                    --lastIt;
-                    entryIdCounterMap[logType] = lastIt->first.second;
+                    lg2::error(
+                        "Failed to deserialize restored error entry {ID_NUM} "
+                        "from {PATH}",
+                        "ID_NUM", idNum, "PATH", file.path().string());
                 }
             }
+        }
+
+        // Enforce configured caps after restoring all entries for this type
+        auto orderEntriesByTimestamp = [this, logType](auto& ids) {
+            ids.sort([this, logType](uint32_t lhs, uint32_t rhs) {
+                const auto& left = entries.at(std::make_pair(logType, lhs));
+                const auto& right = entries.at(std::make_pair(logType, rhs));
+                if (left->timestamp() != right->timestamp())
+                {
+                    return left->timestamp() < right->timestamp();
+                }
+                return lhs < rhs;
+            });
+        };
+
+        auto& realErrors = realErrorsMap[logType];
+        auto& infoErrors = infoErrorsMap[logType];
+        orderEntriesByTimestamp(realErrors);
+        orderEntriesByTimestamp(infoErrors);
+
+        while (realErrors.size() > ERROR_CAP)
+        {
+            erase(logType, realErrors.front(), true);
+        }
+        while (infoErrors.size() > ERROR_INFO_CAP)
+        {
+            erase(logType, infoErrors.front(), true);
+        }
+
+        entryIdCounterMap[logType] = 0;
+        for (const auto& [key, entry] : entries)
+        {
+            if (key.first == logType)
+            {
+                entryIdCounterMap[logType] =
+                    std::max(entryIdCounterMap[logType], key.second);
+            }
+        }
+
+        updateEntryLimits(logType);
+        if (logType == LogType::IPMI)
+        {
+            updateLastEntryId(
+                static_cast<uint16_t>(entryIdCounterMap[logType]));
+            updateEntryCount();
         }
     }
 }
