@@ -1191,8 +1191,10 @@ void Manager::restore()
         // Enforce configured caps after restoring all entries for this type
         auto orderEntriesByTimestamp = [this, logType](auto& ids) {
             ids.sort([this, logType](uint32_t entryIdA, uint32_t entryIdB) {
-                const auto& entryA = entries.at(std::make_pair(logType, entryIdA));
-                const auto& entryB = entries.at(std::make_pair(logType, entryIdB));
+                const auto& entryA =
+                    entries.at(std::make_pair(logType, entryIdA));
+                const auto& entryB =
+                    entries.at(std::make_pair(logType, entryIdB));
                 if (entryA->timestamp() != entryB->timestamp())
                 {
                     return entryA->timestamp() < entryB->timestamp();
