@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <map>
 #include <ranges>
 #include <set>
@@ -46,6 +47,7 @@ constexpr auto policyLinear =
     "xyz.openbmc_project.Logging.Settings.Policy.Linear";
 constexpr auto policyDefault =
     "xyz.openbmc_project.Logging.Settings.Policy.Circular";
+constexpr std::string_view numericCharacters{"0123456789"};
 
 /*D-bus details for BMC Global enable */
 static constexpr const char* settingService = "xyz.openbmc_project.Settings";
@@ -957,10 +959,6 @@ void Manager::erase(LogType logType, uint32_t entryId, bool deferUpdates)
                 }
             }
         }
-        else
-        {
-            lg2::error("Invalid entry ID ({ID}) to delete", "ID", entryId);
-        }
 
         if (!deferUpdates)
         {
@@ -1016,14 +1014,28 @@ void Manager::restore()
         // Special handling for IPMI: sort files by modification time
         if (logType == LogType::IPMI)
         {
-            std::vector<std::tuple<time_t, long, fs::path>> sortedFiles;
+            std::vector<std::tuple<time_t, uint32_t, fs::path>> sortedFiles;
 
             for (auto& file : fs::directory_iterator(dir))
             {
                 try
                 {
                     auto id = file.path().filename().string();
-                    auto idNum = std::stol(id);
+                    if (id.empty() || id.find_first_not_of(numericCharacters) !=
+                                          std::string::npos)
+                    {
+                        lg2::error("Skipping non-numeric restored file {FILE}",
+                                   "FILE", id);
+                        continue;
+                    }
+                    auto parsedId = std::stoull(id);
+                    if (parsedId > std::numeric_limits<uint32_t>::max())
+                    {
+                        lg2::error("Skipping out-of-range restored file {FILE}",
+                                   "FILE", id);
+                        continue;
+                    }
+                    auto idNum = static_cast<uint32_t>(parsedId);
                     struct stat st;
                     if (stat(file.path().c_str(), &st) == 0)
                     {
@@ -1099,24 +1111,38 @@ void Manager::restore()
             for (auto& file : fs::directory_iterator(dir))
             {
                 auto filename = file.path().filename().string();
-                long idNum;
+                uint32_t idNum;
                 try
                 {
-                    idNum = std::stol(filename);
+                    if (filename.empty() ||
+                        filename.find_first_not_of(numericCharacters) !=
+                            std::string::npos)
+                    {
+                        lg2::error("Skipping non-numeric restored file {FILE}",
+                                   "FILE", filename);
+                        continue;
+                    }
+                    auto parsedId = std::stoull(filename);
+                    if (parsedId > std::numeric_limits<uint32_t>::max())
+                    {
+                        lg2::error("Skipping out-of-range restored file {FILE}",
+                                   "FILE", filename);
+                        continue;
+                    }
+                    idNum = static_cast<uint32_t>(parsedId);
                 }
                 catch (const std::exception& ex)
                 {
-                    lg2::error(
-                        "Skipping non-numeric restored file {FILE}: {ERROR}",
-                        "FILE", filename, "ERROR", ex);
+                    lg2::error("Unable to parse restored file {FILE}: {ERROR}",
+                               "FILE", filename, "ERROR", ex);
                     continue;
                 }
                 auto idStr = std::to_string(idNum);
                 std::unique_ptr<Entry> e;
                 try
                 {
-                    e = std::make_unique<Entry>(
-                        busLog, objEntry + '/' + idStr, idNum, *this);
+                    e = std::make_unique<Entry>(busLog, objEntry + '/' + idStr,
+                                                idNum, *this);
                 }
                 catch (const sdbusplus::exception_t& ex)
                 {
@@ -1164,14 +1190,14 @@ void Manager::restore()
 
         // Enforce configured caps after restoring all entries for this type
         auto orderEntriesByTimestamp = [this, logType](auto& ids) {
-            ids.sort([this, logType](uint32_t lhs, uint32_t rhs) {
-                const auto& left = entries.at(std::make_pair(logType, lhs));
-                const auto& right = entries.at(std::make_pair(logType, rhs));
-                if (left->timestamp() != right->timestamp())
+            ids.sort([this, logType](uint32_t entryIdA, uint32_t entryIdB) {
+                const auto& entryA = entries.at(std::make_pair(logType, entryIdA));
+                const auto& entryB = entries.at(std::make_pair(logType, entryIdB));
+                if (entryA->timestamp() != entryB->timestamp())
                 {
-                    return left->timestamp() < right->timestamp();
+                    return entryA->timestamp() < entryB->timestamp();
                 }
-                return lhs < rhs;
+                return entryIdA < entryIdB;
             });
         };
 
@@ -1182,11 +1208,34 @@ void Manager::restore()
 
         while (realErrors.size() > ERROR_CAP)
         {
-            erase(logType, realErrors.front(), true);
+            auto idToErase = realErrors.front();
+            try
+            {
+                erase(logType, idToErase, true);
+            }
+            catch (const std::exception& ex)
+            {
+                lg2::error(
+                    "Unable to trim excess restored error entry {ID}: {ERROR}",
+                    "ID", idToErase, "ERROR", ex);
+                break;
+            }
         }
         while (infoErrors.size() > ERROR_INFO_CAP)
         {
-            erase(logType, infoErrors.front(), true);
+            auto idToErase = infoErrors.front();
+            try
+            {
+                erase(logType, idToErase, true);
+            }
+            catch (const std::exception& ex)
+            {
+                lg2::error(
+                    "Unable to trim excess restored informational entry {ID}: "
+                    "{ERROR}",
+                    "ID", idToErase, "ERROR", ex);
+                break;
+            }
         }
 
         entryIdCounterMap[logType] = 0;
