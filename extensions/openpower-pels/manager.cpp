@@ -19,6 +19,7 @@
 #include <xyz/openbmc_project/Common/error.hpp>
 #include <xyz/openbmc_project/Logging/Create/server.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -552,8 +553,18 @@ void Manager::pruneRepo(sdeventplus::source::EventBase& /*source*/)
     auto idsToDelete = _repo.prune(idsWithHwIsoEntry);
 
     // Remove the OpenBMC event logs for the PELs that were just removed.
+#ifdef UNIT_TEST
+    std::for_each(idsToDelete.begin(), idsToDelete.end(), [this](auto id) {
+        auto it = _logManager.entryIdToLogType.find(id);
+        if (it != _logManager.entryIdToLogType.end())
+        {
+            _logManager.erase(it->second, id);
+        }
+    });
+#else
     std::for_each(idsToDelete.begin(), idsToDelete.end(),
                   [this](auto id) { this->_logManager.erase(id); });
+#endif
 
     _repoPrunerEventSource.reset();
 }
@@ -629,7 +640,16 @@ void Manager::pelFileDeleted(sdeventplus::source::IO& /*io*/, int /*fd*/,
                     auto removedLogID = _repo.remove(id);
                     if (removedLogID)
                     {
+#ifdef UNIT_TEST
+                        auto logId = removedLogID->obmcID.id;
+                        auto it = _logManager.entryIdToLogType.find(logId);
+                        if (it != _logManager.entryIdToLogType.end())
+                        {
+                            _logManager.erase(it->second, logId);
+                        }
+#else
                         _logManager.erase(removedLogID->obmcID.id);
+#endif
                     }
                 }
                 catch (const std::exception& e)
@@ -755,7 +775,13 @@ void Manager::updateEventId(std::unique_ptr<openpower::pels::PEL>& pel)
 {
     std::string eventIdStr = getEventId(*pel);
 
+#ifdef UNIT_TEST
+    auto entryN = std::find_if(
+        _logManager.entries.begin(), _logManager.entries.end(),
+        [&](const auto& e) { return e.first.second == pel->obmcLogID(); });
+#else
     auto entryN = _logManager.entries.find(pel->obmcLogID());
+#endif
     if (entryN != _logManager.entries.end())
     {
         entryN->second->eventId(eventIdStr, true);
@@ -842,7 +868,13 @@ std::string Manager::getResolution(const openpower::pels::PEL& pel) const
 bool Manager::updateResolution(const openpower::pels::PEL& pel)
 {
     std::string callouts = getResolution(pel);
+#ifdef UNIT_TEST
+    auto entryN = std::find_if(
+        _logManager.entries.begin(), _logManager.entries.end(),
+        [&](const auto& e) { return e.first.second == pel.obmcLogID(); });
+#else
     auto entryN = _logManager.entries.find(pel.obmcLogID());
+#endif
     if (entryN != _logManager.entries.end())
     {
         entryN->second->resolution(callouts, true);
@@ -853,7 +885,13 @@ bool Manager::updateResolution(const openpower::pels::PEL& pel)
 
 void Manager::serializeLogEntry(uint32_t obmcLogID)
 {
+#ifdef UNIT_TEST
+    auto entryN = std::find_if(
+        _logManager.entries.begin(), _logManager.entries.end(),
+        [&](const auto& e) { return e.first.second == obmcLogID; });
+#else
     auto entryN = _logManager.entries.find(obmcLogID);
+#endif
     if (entryN != _logManager.entries.end())
     {
         serialize(*entryN->second);
@@ -873,7 +911,13 @@ void Manager::updateDBusSeverity(const openpower::pels::PEL& pel)
     auto sevType =
         static_cast<SeverityType>(pel.userHeader().severity() & 0xF0);
 
+#ifdef UNIT_TEST
+    auto entryN = std::find_if(
+        _logManager.entries.begin(), _logManager.entries.end(),
+        [&](const auto& e) { return e.first.second == pel.obmcLogID(); });
+#else
     auto entryN = _logManager.entries.find(pel.obmcLogID());
+#endif
     if (entryN != _logManager.entries.end())
     {
         auto newSeverity =
@@ -897,7 +941,13 @@ void Manager::setEntryPath(uint32_t obmcLogID)
     if (auto attributes = _repo.getPELAttributes(id); attributes)
     {
         auto& attr = attributes.value().get();
+#ifdef UNIT_TEST
+        auto entry = std::find_if(
+            _logManager.entries.begin(), _logManager.entries.end(),
+            [&](const auto& e) { return e.first.second == obmcLogID; });
+#else
         auto entry = _logManager.entries.find(obmcLogID);
+#endif
         if (entry != _logManager.entries.end())
         {
             entry->second->path(attr.path, true);
@@ -911,7 +961,13 @@ void Manager::setServiceProviderNotifyFlag(uint32_t obmcLogID)
     if (auto attributes = _repo.getPELAttributes(id); attributes)
     {
         auto& attr = attributes.value().get();
+#ifdef UNIT_TEST
+        auto entry = std::find_if(
+            _logManager.entries.begin(), _logManager.entries.end(),
+            [&](const auto& e) { return e.first.second == obmcLogID; });
+#else
         auto entry = _logManager.entries.find(obmcLogID);
+#endif
         if (entry != _logManager.entries.end())
         {
             if (attr.actionFlags.test(callHomeFlagBit))
@@ -1051,7 +1107,15 @@ void Manager::scheduleObmcLogDelete(uint32_t obmcLogID)
 void Manager::deleteObmcLog(sdeventplus::source::EventBase&, uint32_t obmcLogID)
 {
     lg2::info("Removing event log with no PEL: {BMCID}", "BMCID", obmcLogID);
+#ifdef UNIT_TEST
+    auto it = _logManager.entryIdToLogType.find(obmcLogID);
+    if (it != _logManager.entryIdToLogType.end())
+    {
+        _logManager.erase(it->second, obmcLogID);
+    }
+#else
     _logManager.erase(obmcLogID);
+#endif
     _obmcLogDeleteEventSource.reset();
 }
 
